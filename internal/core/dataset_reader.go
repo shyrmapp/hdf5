@@ -12,6 +12,69 @@ import (
 // ReadDatasetFloat64 reads a dataset and returns values as float64 array.
 // This is the main entry point for reading numerical datasets.
 func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]float64, error) {
+	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb)
+	if err != nil {
+		return nil, err
+	}
+	if totalElements == 0 {
+		return []float64{}, nil
+	}
+	return convertToFloat64(rawData, datatype, totalElements)
+}
+
+// ReadDatasetComplex reads a complex-number dataset (datatype class 11,
+// introduced in HDF5 2.0) and returns values as complex128. Both
+// complex128 (16-byte, float64 parts) and complex64 (8-byte, float32
+// parts) storage are supported; parts are stored (real, imaginary).
+func ReadDatasetComplex(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]complex128, error) {
+	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb)
+	if err != nil {
+		return nil, err
+	}
+	if datatype.Class != DatatypeComplex {
+		return nil, fmt.Errorf("dataset is not complex (class %d)", datatype.Class)
+	}
+	if totalElements == 0 {
+		return []complex128{}, nil
+	}
+
+	// The complex datatype's properties embed the base floating-point
+	// datatype; byte order comes from THAT bit field, not the complex
+	// type's own (whose bit 0 means something else).
+	byteOrder := datatype.GetByteOrder()
+	if base, baseErr := ParseDatatypeMessage(datatype.Properties); baseErr == nil && base.Class == DatatypeFloat {
+		byteOrder = base.GetByteOrder()
+	}
+	result := make([]complex128, totalElements)
+	switch datatype.Size {
+	case 16: // float64 parts
+		if totalElements*16 > uint64(len(rawData)) {
+			return nil, errors.New("data truncated (complex128)")
+		}
+		for i := uint64(0); i < totalElements; i++ {
+			re := math.Float64frombits(byteOrder.Uint64(rawData[i*16 : i*16+8]))
+			im := math.Float64frombits(byteOrder.Uint64(rawData[i*16+8 : i*16+16]))
+			result[i] = complex(re, im)
+		}
+	case 8: // float32 parts
+		if totalElements*8 > uint64(len(rawData)) {
+			return nil, errors.New("data truncated (complex64)")
+		}
+		for i := uint64(0); i < totalElements; i++ {
+			re := math.Float32frombits(byteOrder.Uint32(rawData[i*8 : i*8+4]))
+			im := math.Float32frombits(byteOrder.Uint32(rawData[i*8+4 : i*8+8]))
+			result[i] = complex(float64(re), float64(im))
+		}
+	default:
+		return nil, fmt.Errorf("unsupported complex element size %d bytes", datatype.Size)
+	}
+	return result, nil
+}
+
+// readDatasetRaw extracts the datatype and raw element bytes of a dataset:
+// message extraction, layout dispatch (compact/contiguous/chunked), and
+// filter pipeline handling shared by the typed readers.
+func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]byte, *DatatypeMessage, uint64, error) {
 	// 1. Extract required messages from object header.
 	var datatypeMsg, dataspaceMsg, layoutMsg, filterPipelineMsg *HeaderMessage
 
@@ -30,31 +93,31 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 
 	// Validate we have all required messages.
 	if datatypeMsg == nil {
-		return nil, errors.New("datatype message not found")
+		return nil, nil, 0, errors.New("datatype message not found")
 	}
 	if dataspaceMsg == nil {
-		return nil, errors.New("dataspace message not found")
+		return nil, nil, 0, errors.New("dataspace message not found")
 	}
 	if layoutMsg == nil {
-		return nil, errors.New("data layout message not found")
+		return nil, nil, 0, errors.New("data layout message not found")
 	}
 
 	// 2. Parse datatype.
 	datatype, err := ParseDatatypeMessage(datatypeMsg.Data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse datatype: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to parse datatype: %w", err)
 	}
 
 	// 3. Parse dataspace.
 	dataspace, err := ParseDataspaceMessage(dataspaceMsg.Data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to parse dataspace: %w", err)
 	}
 
 	// 4. Parse layout.
 	layout, err := ParseDataLayoutMessage(layoutMsg.Data, sb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse layout: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to parse layout: %w", err)
 	}
 
 	// 5. Parse filter pipeline (optional, for compression).
@@ -62,14 +125,14 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 	if filterPipelineMsg != nil {
 		filterPipeline, err = ParseFilterPipelineMessage(filterPipelineMsg.Data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse filter pipeline: %w", err)
+			return nil, nil, 0, fmt.Errorf("failed to parse filter pipeline: %w", err)
 		}
 	}
 
 	// 6. Calculate total number of elements.
 	totalElements := dataspace.TotalElements()
 	if totalElements == 0 {
-		return []float64{}, nil
+		return []byte{}, datatype, 0, nil
 	}
 
 	// 6. Read data based on layout type.
@@ -88,22 +151,21 @@ func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
+			return nil, nil, 0, fmt.Errorf("failed to read contiguous data: %w", err)
 		}
 
 	case layout.IsChunked():
 		// Data is stored in chunks indexed by B-tree.
 		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read chunked data: %w", err)
+			return nil, nil, 0, fmt.Errorf("failed to read chunked data: %w", err)
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported layout class: %d", layout.Class)
+		return nil, nil, 0, fmt.Errorf("unsupported layout class: %d", layout.Class)
 	}
 
-	// 7. Convert raw bytes to float64 based on datatype.
-	return convertToFloat64(rawData, datatype, totalElements)
+	return rawData, datatype, totalElements, nil
 }
 
 // ConvertToFloat64 converts raw element bytes to a float64 slice based on

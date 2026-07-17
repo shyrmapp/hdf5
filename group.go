@@ -109,6 +109,17 @@ func (d *Dataset) Read() ([]float64, error) {
 	return core.ReadDatasetFloat64(d.file.osFile, header, d.file.sb)
 }
 
+// ReadComplex reads a complex-number dataset (HDF5 2.0 datatype class 11)
+// and returns values as complex128. Both complex128 (float64 parts) and
+// complex64 (float32 parts) storage are supported.
+func (d *Dataset) ReadComplex() ([]complex128, error) {
+	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	if err != nil {
+		return nil, err
+	}
+	return core.ReadDatasetComplex(d.file.osFile, header, d.file.sb)
+}
+
 // ReadStrings reads string dataset values and returns them as string array.
 // Supports fixed-length strings (null-terminated, null-padded, space-padded).
 // Variable-length strings are not supported by this method; use ReadVLenBytes.
