@@ -65,6 +65,27 @@ jobs:
         fail_ci_if_error: false
         verbose: true
 
+  # C-library interop - Go-written files validated with official HDF5 tools
+  c-interop:
+    name: C Library Interop
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Install HDF5 tools
+      run: sudo apt-get update && sudo apt-get install -y hdf5-tools
+
+    - name: Run C interop tests
+      run: go test -v -run TestCInterop .
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

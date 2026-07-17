@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"compress/gzip"
 	"compress/zlib"
 	"testing"
 
@@ -32,6 +33,14 @@ func TestApplyDeflate(t *testing.T) {
 			name:    "large data",
 			input:   zlibCompress(t, bytes.Repeat([]byte("test"), 1000)),
 			want:    bytes.Repeat([]byte("test"), 1000),
+			wantErr: false,
+		},
+		{
+			// Releases up to v0.14 wrote gzip-wrapped streams instead of
+			// zlib; applyDeflate sniffs the gzip magic to keep them readable.
+			name:    "legacy gzip-wrapped data",
+			input:   gzipCompress(t, []byte("legacy gzip stream")),
+			want:    []byte("legacy gzip stream"),
 			wantErr: false,
 		},
 		{
@@ -657,6 +666,17 @@ func zlibCompress(t *testing.T, data []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := zlib.NewWriter(&buf)
+	_, err := w.Write(data)
+	require.NoError(t, err)
+	err = w.Close()
+	require.NoError(t, err)
+	return buf.Bytes()
+}
+
+func gzipCompress(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
 	_, err := w.Write(data)
 	require.NoError(t, err)
 	err = w.Close()
