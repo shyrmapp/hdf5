@@ -112,12 +112,13 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 		// Convert SNOD entries to BTreeEntry format
 		for _, entry := range snodNode.Entries {
 			allEntries = append(allEntries, BTreeEntry{
-				LinkNameOffset:  entry.LinkNameOffset,
-				ObjectAddress:   entry.ObjectAddress,
-				CacheType:       entry.CacheType,
-				Reserved:        0,
-				CachedBTreeAddr: entry.CachedBTreeAddr,
-				CachedHeapAddr:  entry.CachedHeapAddr,
+				LinkNameOffset:       entry.LinkNameOffset,
+				ObjectAddress:        entry.ObjectAddress,
+				CacheType:            entry.CacheType,
+				Reserved:             0,
+				CachedBTreeAddr:      entry.CachedBTreeAddr,
+				CachedHeapAddr:       entry.CachedHeapAddr,
+				CachedSoftLinkOffset: entry.CachedSoftLinkOffset,
 			})
 		}
 	}

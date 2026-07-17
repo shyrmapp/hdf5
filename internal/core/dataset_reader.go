@@ -145,6 +145,17 @@ func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uin
 			result[i] = float64(math.Float32frombits(bits))
 		}
 
+	case datatype.IsFloat16():
+		// IEEE 754 half precision (16-bit), H5T_IEEE_F16LE/BE.
+		for i := uint64(0); i < numElements; i++ {
+			offset := i * 2
+			if offset+2 > uint64(len(rawData)) {
+				return nil, errors.New("data truncated (float16)")
+			}
+
+			result[i] = float16ToFloat64(byteOrder.Uint16(rawData[offset : offset+2]))
+		}
+
 	case datatype.IsFixedPoint():
 		// Fixed-point integer of any width (1/2/4/8 bytes), signed or
 		// unsigned. The HDF5 spec encodes width in datatype.Size and
@@ -463,4 +474,31 @@ func copyNDChunkRecursive(chunkData, fullData []byte, indices []uint64, dim int,
 	}
 
 	return nil
+}
+
+// float16ToFloat64 converts an IEEE 754 half-precision bit pattern to float64.
+// Handles subnormals, infinities, and NaN per the standard.
+func float16ToFloat64(bits uint16) float64 {
+	sign := uint64(bits>>15) & 1
+	exp := uint64(bits>>10) & 0x1F
+	frac := uint64(bits) & 0x3FF
+
+	var f64bits uint64
+	switch exp {
+	case 0x1F:
+		// Inf / NaN: max exponent, preserve fraction (NaN payload).
+		f64bits = sign<<63 | 0x7FF<<52 | frac<<42
+	case 0:
+		if frac == 0 {
+			// Signed zero.
+			f64bits = sign << 63
+		} else {
+			// Subnormal: value = frac * 2^-24. Convert exactly via math.
+			return math.Copysign(float64(frac)*0x1p-24, float64(1-2*int(sign)))
+		}
+	default:
+		// Normal: rebias exponent 15 -> 1023.
+		f64bits = sign<<63 | (exp+1023-15)<<52 | frac<<42
+	}
+	return math.Float64frombits(f64bits)
 }

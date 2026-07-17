@@ -1024,36 +1024,19 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 }
 
 // CreateCompoundDataset creates a dataset with a compound (struct-like) datatype.
-// This is an advanced method for creating datasets with complex structured data.
+// This is an advanced method taking a pre-encoded compound datatype message;
+// most callers should use CreateCompoundDatasetFromFields, which builds the
+// datatype from a plain field list.
 //
 // Parameters:
 //   - name: Dataset path (e.g., "/data" or "/group/dataset")
-//   - compoundType: Pre-configured compound datatype (use core.CreateCompoundTypeFromFields)
+//   - compoundType: Pre-configured compound datatype (see NewCompoundType)
 //   - dims: Dataset dimensions (e.g., []uint64{10} for 1D, []uint64{3, 4} for 2D)
 //   - opts: Optional configuration (chunking, compression, etc.)
 //
 // Returns:
 //   - *DatasetWriter: Dataset writer for writing data with WriteRaw()
 //   - error: If creation fails
-//
-// Example:
-//
-//	// Define compound type: struct { int32 id; float32 value }
-//	int32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFixed, 4)
-//	float32Type, _ := core.CreateBasicDatatypeMessage(core.DatatypeFloat, 4)
-//	fields := []core.CompoundFieldDef{
-//	    {Name: "id", Offset: 0, Type: int32Type},
-//	    {Name: "value", Offset: 4, Type: float32Type},
-//	}
-//	compoundType, _ := core.CreateCompoundTypeFromFields(fields)
-//
-//	// Create dataset
-//	fw, _ := hdf5.CreateForWrite("file.h5", hdf5.CreateTruncate)
-//	ds, _ := fw.CreateCompoundDataset("/data", compoundType, []uint64{100})
-//
-//	// Write raw struct data
-//	data := []byte{/* encoded structs */}
-//	ds.WriteRaw(data)
 //
 // Reference: H5Dcreate2.c - H5D__create(), H5Tcompound.c - compound datatype handling.
 //
@@ -2010,6 +1993,28 @@ func WithGZIPCompression(level int) DatasetOption {
 			cfg.pipeline = writer.NewFilterPipeline()
 		}
 		cfg.pipeline.AddFilter(writer.NewGZIPFilter(level))
+	}
+}
+
+// WithLZFCompression enables LZF compression for chunked datasets
+// (requires WithChunkDims).
+//
+// LZF is the fast, lightweight compressor used by h5py and PyTables
+// (filter ID 32000). It compresses less than GZIP but is much faster,
+// and files are readable by h5py out of the box. The C tools (h5dump)
+// need the LZF filter plugin to decompress the data.
+//
+// Example:
+//
+//	ds, err := fw.CreateDataset("/data", hdf5.Float64, []uint64{10000},
+//	    hdf5.WithChunkDims([]uint64{1000}),
+//	    hdf5.WithLZFCompression())
+func WithLZFCompression() DatasetOption {
+	return func(cfg *datasetConfig) {
+		if cfg.pipeline == nil {
+			cfg.pipeline = writer.NewFilterPipeline()
+		}
+		cfg.pipeline.AddFilter(writer.NewLZFFilter())
 	}
 }
 

@@ -370,36 +370,21 @@ func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) 
 		// LinkValue: file name + object path (will be set below)
 	}
 
-	// Encode external link value
-	// External link format: fileNameLength(2) + fileName + pathLength(2) + path
-	fileNameBytes := []byte(fileName)
-	objectPathBytes := []byte(objectPath)
-
-	// Validate lengths fit in uint16
-	if len(fileNameBytes) > 65535 {
-		return fmt.Errorf("file name too long: %d bytes (max 65535)", len(fileNameBytes))
-	}
-	if len(objectPathBytes) > 65535 {
-		return fmt.Errorf("object path too long: %d bytes (max 65535)", len(objectPathBytes))
+	// Encode external link value per spec (H5Lexternal.c - H5L__extern_create):
+	// 2-byte value length, then version/flags byte (0), null-terminated file
+	// name, and null-terminated object path.
+	udLen := 1 + len(fileName) + 1 + len(objectPath) + 1
+	if udLen > 65535 {
+		return fmt.Errorf("external link value too long: %d bytes (max 65535)", udLen)
 	}
 
-	linkValue := make([]byte, 2+len(fileNameBytes)+2+len(objectPathBytes))
-	offset := 0
-
-	// Write file name length (2 bytes)
-	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(fileNameBytes))) //nolint:gosec // Validated above
-	offset += 2
-
-	// Write file name
-	copy(linkValue[offset:], fileNameBytes)
-	offset += len(fileNameBytes)
-
-	// Write object path length (2 bytes)
-	fw.file.sb.Endianness.PutUint16(linkValue[offset:offset+2], uint16(len(objectPathBytes))) //nolint:gosec // Validated above
-	offset += 2
-
-	// Write object path
-	copy(linkValue[offset:], objectPathBytes)
+	linkValue := make([]byte, 2, 2+udLen)
+	fw.file.sb.Endianness.PutUint16(linkValue, uint16(udLen)) // Length validated above
+	linkValue = append(linkValue, 0)                          // Version 0, no flags
+	linkValue = append(linkValue, fileName...)
+	linkValue = append(linkValue, 0)
+	linkValue = append(linkValue, objectPath...)
+	linkValue = append(linkValue, 0)
 
 	linkMsg.LinkValue = linkValue
 

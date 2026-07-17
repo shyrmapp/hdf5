@@ -32,6 +32,10 @@ type LinkMessage struct {
 
 	// For soft links.
 	TargetPath string
+
+	// For external links: target file name and object path within it.
+	FileName   string
+	ObjectPath string
 }
 
 // Link message flag bits.
@@ -192,18 +196,56 @@ func ParseLinkMessage(data []byte, sb *core.Superblock) (*LinkMessage, error) {
 
 	default:
 		// External or user-defined links (type >= 64).
-		// For now, just skip the data.
 		// User-defined link data: 2 bytes length + data.
 		if current+2 > len(data) {
 			return nil, fmt.Errorf("unexpected end of data reading user-defined link length")
 		}
 		udLen := binary.LittleEndian.Uint16(data[current : current+2])
-		// Skip user-defined link data: current += 2 + int(udLen).
-		// Not implemented yet, so we don't need to track current.
-		_ = udLen // Acknowledge we read it but don't use it.
+		current += 2
+
+		if msg.Type == LinkTypeExternal {
+			if current+int(udLen) > len(data) {
+				return nil, fmt.Errorf("unexpected end of data reading external link value")
+			}
+			parseExternalLinkValue(msg, data[current:current+int(udLen)])
+		}
+		// Other user-defined link types are not decoded.
 	}
 
 	return msg, nil
+}
+
+// parseExternalLinkValue decodes an external link value into msg.
+//
+// Format (H5Lexternal.c - H5L__extern_create): 1 byte version (bits 4-7) and
+// flags (bits 0-3), then the null-terminated file name, then the object path
+// (null-terminated; the terminator may be absent in the last position).
+// Malformed values leave FileName/ObjectPath empty rather than failing the
+// whole message.
+func parseExternalLinkValue(msg *LinkMessage, value []byte) {
+	if len(value) < 2 {
+		return
+	}
+	if value[0]>>4 != 0 {
+		// Unknown external link version.
+		return
+	}
+	rest := value[1:]
+	nameEnd := 0
+	for nameEnd < len(rest) && rest[nameEnd] != 0 {
+		nameEnd++
+	}
+	if nameEnd >= len(rest) {
+		// File name not null-terminated: no room left for an object path.
+		return
+	}
+	msg.FileName = string(rest[:nameEnd])
+	path := rest[nameEnd+1:]
+	// Trim trailing null terminator if present.
+	if n := len(path); n > 0 && path[n-1] == 0 {
+		path = path[:n-1]
+	}
+	msg.ObjectPath = string(path)
 }
 
 // IsHardLink returns true if this is a hard link.
@@ -214,4 +256,9 @@ func (lm *LinkMessage) IsHardLink() bool {
 // IsSoftLink returns true if this is a soft link.
 func (lm *LinkMessage) IsSoftLink() bool {
 	return lm.Type == LinkTypeSoft
+}
+
+// IsExternalLink returns true if this is an external link.
+func (lm *LinkMessage) IsExternalLink() bool {
+	return lm.Type == LinkTypeExternal
 }
