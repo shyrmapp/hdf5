@@ -295,15 +295,6 @@ func (di *DatasetInfo) String() string {
 
 // readChunkedData reads data from chunked layout.
 func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, datatype *DatatypeMessage, sb *Superblock, filterPipeline *FilterPipelineMessage) ([]byte, error) {
-	// Parse B-tree to get chunk index.
-	// Note: chunk dimensions may include an extra dimension for datatype size.
-	// (HDF5 stores "fastest-varying dimension" as bytes, see H5Dbtree.c comments).
-	ndims := len(layout.ChunkSize)
-	btree, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse B-tree: %w", err)
-	}
-
 	// Calculate total data size.
 	totalElements := dataspace.TotalElements()
 	elementSize := uint64(datatype.Size)
@@ -322,55 +313,107 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	// Allocate output buffer.
 	rawData := make([]byte, totalBytes)
 
-	// Collect all chunks from B-tree (handles both leaf and non-leaf nodes).
-	chunks, err := btree.CollectAllChunks(r, sb.OffsetSize, layout.ChunkSize)
+	// Collect the chunk list from whichever chunk index the layout uses:
+	// layout v3 files index chunks with a v1 B-tree; layout v4/v5 files
+	// (HDF5 1.10+ under H5F_LIBVER_LATEST) use one of the modern indexes.
+	chunks, err := CollectChunks(r, layout, dataspace, sb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to collect chunks: %w", err)
+		return nil, err
 	}
 
 	// Read each chunk and copy to correct position.
-	for _, chunk := range chunks {
-		chunkKey := chunk.Key
-		chunkAddr := chunk.Address
+	dataDims := dataspace.Dimensions
+	actualChunkDims := layout.ChunkSize[:len(dataDims)]
 
+	for _, chunk := range chunks {
 		// CVE-2025-7067 fix: Validate chunk size before allocation to prevent buffer overflow.
-		if err := utils.ValidateBufferSize(uint64(chunkKey.Nbytes), utils.MaxChunkSize, "chunk data"); err != nil {
-			return nil, fmt.Errorf("invalid chunk size at 0x%x: %w", chunkAddr, err)
+		if err := utils.ValidateBufferSize(chunk.NBytes, utils.MaxChunkSize, "chunk data"); err != nil {
+			return nil, fmt.Errorf("invalid chunk size at 0x%x: %w", chunk.Address, err)
 		}
 
 		// Read chunk data.
-		chunkData := make([]byte, chunkKey.Nbytes)
+		chunkData := make([]byte, chunk.NBytes)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(chunkData, int64(chunkAddr))
+		_, err := r.ReadAt(chunkData, int64(chunk.Address))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunkAddr, err)
+			return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunk.Address, err)
 		}
 
 		// Apply filters (decompression, etc) if present.
-		if filterPipeline != nil {
+		if filterPipeline != nil && !chunkStoredUnfiltered(layout, chunk, actualChunkDims, dataDims) {
+			if chunk.FilterMask != 0 {
+				return nil, fmt.Errorf("per-chunk filter masks not supported (chunk at 0x%x, mask 0x%x)",
+					chunk.Address, chunk.FilterMask)
+			}
 			chunkData, err = filterPipeline.ApplyFilters(chunkData)
 			if err != nil {
-				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunkAddr, err)
+				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
 			}
 		}
 
 		// Calculate where this chunk goes in the output array.
 		// For N-dimensional dataset, chunk [i0, i1, ...] maps to elements:
 		// [i0*chunk[0] : (i0+1)*chunk[0], i1*chunk[1] : (i1+1)*chunk[1], ...].
-
-		// Trim chunk dimensions to match dataset dimensions.
-		// (chunk may have extra dimension for datatype size).
-		dataDims := dataspace.Dimensions
-		actualChunkDims := layout.ChunkSize[:len(dataDims)]
-		actualChunkCoords := chunkKey.Scaled[:len(dataDims)]
-
-		err = copyChunkToArray(chunkData, rawData, actualChunkCoords, actualChunkDims, dataDims, elementSize)
+		err = copyChunkToArray(chunkData, rawData, chunk.Scaled, actualChunkDims, dataDims, elementSize)
 		if err != nil {
-			return nil, fmt.Errorf("failed to copy chunk %v: %w", actualChunkCoords, err)
+			return nil, fmt.Errorf("failed to copy chunk %v: %w", chunk.Scaled, err)
 		}
 	}
 
 	return rawData, nil
+}
+
+// CollectChunks lists all allocated chunks of a chunked dataset, dispatching
+// on the layout message version: v3 walks the v1 B-tree, v4/v5 walk the chunk
+// index named in the message. Scaled coordinates are trimmed to the dataset
+// rank in both cases.
+func CollectChunks(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, sb *Superblock) ([]ChunkLocation, error) {
+	if layout.Version >= 4 {
+		return CollectChunksV4(r, layout, dataspace, sb)
+	}
+
+	// Layout v3: chunk index is a v1 B-tree. Note: chunk dimensions include
+	// an extra trailing dimension for the datatype size (see H5Dbtree.c).
+	ndims := len(layout.ChunkSize)
+	btree, err := ParseBTreeV1Node(r, layout.DataAddress, sb.OffsetSize, ndims, layout.ChunkSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse B-tree: %w", err)
+	}
+
+	chunks, err := btree.CollectAllChunks(r, sb.OffsetSize, layout.ChunkSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect chunks: %w", err)
+	}
+
+	rank := len(dataspace.Dimensions)
+	entries := make([]ChunkLocation, 0, len(chunks))
+	for _, chunk := range chunks {
+		if rank > len(chunk.Key.Scaled) {
+			return nil, fmt.Errorf("chunk key rank %d smaller than dataset rank %d", len(chunk.Key.Scaled), rank)
+		}
+		entries = append(entries, ChunkLocation{
+			Scaled:     chunk.Key.Scaled[:rank],
+			Address:    chunk.Address,
+			NBytes:     uint64(chunk.Key.Nbytes),
+			FilterMask: chunk.Key.FilterMask,
+		})
+	}
+	return entries, nil
+}
+
+// chunkStoredUnfiltered reports whether this particular chunk bypassed the
+// filter pipeline: layout v4/v5 can flag partial edge chunks as stored raw
+// (H5O_LAYOUT_CHUNK_DONT_FILTER_PARTIAL_BOUND_CHUNKS).
+func chunkStoredUnfiltered(layout *DataLayoutMessage, chunk ChunkLocation, chunkDims, dataDims []uint64) bool {
+	if layout.Version < 4 || layout.Flags&LayoutChunkDontFilterPartialChunks == 0 {
+		return false
+	}
+	for i, coord := range chunk.Scaled {
+		if (coord+1)*chunkDims[i] > dataDims[i] {
+			return true // Partial edge chunk: stored without filtering.
+		}
+	}
+	return false
 }
 
 // copyChunkToArray copies chunk data to the correct position in full array.

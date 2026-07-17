@@ -19,6 +19,26 @@ const (
 	layoutUnknown = "unknown" // String representation for unknown layout class.
 )
 
+// Chunk indexing types used by data layout message versions 4 and 5.
+// Reference: H5Dpkg.h (H5D_chunk_index_t) and the HDF5 file format spec,
+// "Version 4 Data Layout Message: Chunked Storage Property Description".
+const (
+	ChunkIndexBTreeV1  uint8 = 0 // Implied for layout v3 (not stored in file).
+	ChunkIndexSingle   uint8 = 1 // Single Chunk index.
+	ChunkIndexImplicit uint8 = 2 // Implicit index (contiguous chunks, no metadata).
+	ChunkIndexFixed    uint8 = 3 // Fixed Array index.
+	ChunkIndexExt      uint8 = 4 // Extensible Array index.
+	ChunkIndexBTreeV2  uint8 = 5 // Version 2 B-tree index.
+)
+
+// Layout v4/v5 chunked flags (H5O_LAYOUT_CHUNK_* in H5Olayout.h).
+const (
+	// LayoutChunkDontFilterPartialChunks: partial edge chunks are stored unfiltered.
+	LayoutChunkDontFilterPartialChunks uint8 = 0x01
+	// LayoutChunkSingleIndexWithFilter: single-chunk index stores filtered size + mask.
+	LayoutChunkSingleIndexWithFilter uint8 = 0x02
+)
+
 // DataLayoutMessage represents HDF5 data layout message.
 type DataLayoutMessage struct {
 	Version      uint8
@@ -28,6 +48,29 @@ type DataLayoutMessage struct {
 	CompactData  []byte   // Data itself (for compact layout).
 	ChunkSize    []uint64 // Chunk dimensions (for chunked layout) - uint64 for HDF5 2.0.0+ support.
 	ChunkKeySize uint8    // Size of chunk keys in bytes: 4 (uint32) or 8 (uint64).
+
+	// Fields below are only set for layout message versions 4 and 5 (chunked).
+	Flags          uint8 // LayoutChunk* flags.
+	ChunkIndexType uint8 // ChunkIndex* constant; ChunkIndexBTreeV1 for v3 layouts.
+
+	// Single Chunk index with filter (Flags & LayoutChunkSingleIndexWithFilter).
+	SingleChunkNBytes     uint64 // Filtered (stored) size of the single chunk.
+	SingleChunkFilterMask uint32 // Filter mask of the single chunk.
+
+	// Fixed Array index creation parameter.
+	FixedArrayPageBits uint8 // Log2 of number of elements per data block page.
+
+	// Extensible Array index creation parameters (decode order per H5Olayout.c).
+	ExtArrayMaxNelmtsBits         uint8 // Log2 of maximum number of elements.
+	ExtArrayIdxBlkElmts           uint8 // Number of elements in the index block.
+	ExtArraySupBlkMinDataPtrs     uint8 // Minimum data block pointers per super block.
+	ExtArrayDataBlkMinElmts       uint8 // Minimum elements per data block.
+	ExtArrayMaxDblkPageNelmtsBits uint8 // Log2 of maximum elements per data block page.
+
+	// Version 2 B-tree index creation parameters.
+	BTreeV2NodeSize     uint32 // Size of B-tree nodes in bytes.
+	BTreeV2SplitPercent uint8  // Node split percentage.
+	BTreeV2MergePercent uint8  // Node merge percentage.
 }
 
 // ParseDataLayoutMessage parses a data layout message from header message data.
@@ -38,8 +81,9 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 
 	version := data[0]
 
-	// Version 3 and 4 are most common (HDF5 1.8+).
-	if version < 3 || version > 4 {
+	// Version 3 (HDF5 1.8+) and versions 4/5 (HDF5 1.10+ with
+	// H5F_LIBVER_LATEST; v5 is written for filtered datasets by 1.14+/2.x).
+	if version < 3 || version > 5 {
 		return nil, fmt.Errorf("unsupported data layout version: %d", version)
 	}
 
@@ -48,14 +92,10 @@ func ParseDataLayoutMessage(data []byte, sb *Superblock) (*DataLayoutMessage, er
 		ChunkKeySize: determineChunkKeySize(sb.Version),
 	}
 
-	switch version {
-	case 3:
+	if version == 3 {
 		return parseLayoutV3(data, sb, msg)
-	case 4:
-		return parseLayoutV4(data, sb, msg)
 	}
-
-	return nil, fmt.Errorf("layout version %d not implemented", version)
+	return parseLayoutV4(data, sb, msg)
 }
 
 // determineChunkKeySize determines the chunk key size based on file format version.
@@ -163,10 +203,121 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 	return msg, nil
 }
 
+// parseLayoutV4 parses HDF5 Data Layout Message versions 4 and 5.
+// Both versions share the same encoding for the fields read here; they differ
+// only for layout classes/index features this reader does not yet support
+// (e.g. virtual storage details). For compact and contiguous classes the
+// encoding is identical to version 3, so those delegate to the v3 parser.
+// Reference: H5Olayout.c (H5O__layout_decode), chunked branch.
 func parseLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLayoutMessage, error) {
-	// Version 4 is similar to v3 but with some differences.
-	// For now, delegate to v3 parser (they're very similar for contiguous layout).
-	return parseLayoutV3(data, sb, msg)
+	if len(data) < 2 {
+		return nil, fmt.Errorf("layout v%d message too short", msg.Version)
+	}
+
+	msg.Class = DataLayoutClass(data[1])
+	if msg.Class != LayoutChunked {
+		// Compact and contiguous have the same wire format as v3.
+		return parseLayoutV3(data, sb, msg)
+	}
+
+	// Chunked storage, v4/v5:
+	//   Flags (1) | Dimensionality (1) | Dim Size Encoded Length (1) |
+	//   Dimension Sizes (dimensionality x encoded length) |
+	//   Chunk Indexing Type (1) | index-specific fields | Address (offsetSize).
+	if len(data) < 5 {
+		return nil, errors.New("chunked layout v4 message too short")
+	}
+	msg.Flags = data[2]
+	dimensionality := int(data[3])
+	encLen := int(data[4])
+	if encLen < 1 || encLen > 8 {
+		return nil, fmt.Errorf("invalid chunk dimension encoded length: %d", encLen)
+	}
+
+	offset := 5
+	if offset+dimensionality*encLen > len(data) {
+		return nil, errors.New("chunked layout v4 dimensions truncated")
+	}
+	// Same convention as v3: chunk dims for each dataset dimension, then the
+	// element size as a trailing pseudo-dimension.
+	msg.ChunkSize = make([]uint64, dimensionality)
+	for i := 0; i < dimensionality; i++ {
+		msg.ChunkSize[i] = readUint64(data[offset:], encLen, sb.Endianness)
+		offset += encLen
+	}
+
+	if offset >= len(data) {
+		return nil, errors.New("chunked layout v4 index type truncated")
+	}
+	msg.ChunkIndexType = data[offset]
+	offset++
+
+	offset, err := parseChunkIndexInfo(data, offset, msg, sb)
+	if err != nil {
+		return nil, err
+	}
+
+	if offset+int(sb.OffsetSize) > len(data) {
+		return nil, errors.New("chunked layout v4 address truncated")
+	}
+	msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+
+	return msg, nil
+}
+
+// parseChunkIndexInfo parses the chunk-index-specific fields of a v4/v5
+// chunked layout message and returns the offset past them.
+func parseChunkIndexInfo(data []byte, offset int, msg *DataLayoutMessage, sb *Superblock) (int, error) {
+	switch msg.ChunkIndexType {
+	case ChunkIndexSingle:
+		if msg.Flags&LayoutChunkSingleIndexWithFilter != 0 {
+			// Filtered single chunk: stored size (lengthSize) + filter mask (4).
+			if offset+int(sb.LengthSize)+4 > len(data) {
+				return 0, errors.New("single chunk filter info truncated")
+			}
+			msg.SingleChunkNBytes = readUint64(data[offset:], int(sb.LengthSize), sb.Endianness)
+			offset += int(sb.LengthSize)
+			msg.SingleChunkFilterMask = sb.Endianness.Uint32(data[offset : offset+4])
+			offset += 4
+		}
+
+	case ChunkIndexImplicit:
+		// No index-specific fields.
+
+	case ChunkIndexFixed:
+		if offset+1 > len(data) {
+			return 0, errors.New("fixed array index info truncated")
+		}
+		msg.FixedArrayPageBits = data[offset]
+		offset++
+
+	case ChunkIndexExt:
+		if offset+5 > len(data) {
+			return 0, errors.New("extensible array index info truncated")
+		}
+		// Decode order per H5Olayout.c: max nelmts bits, index block elements,
+		// super block min data pointers, data block min elements, page bits.
+		msg.ExtArrayMaxNelmtsBits = data[offset]
+		msg.ExtArrayIdxBlkElmts = data[offset+1]
+		msg.ExtArraySupBlkMinDataPtrs = data[offset+2]
+		msg.ExtArrayDataBlkMinElmts = data[offset+3]
+		msg.ExtArrayMaxDblkPageNelmtsBits = data[offset+4]
+		offset += 5
+
+	case ChunkIndexBTreeV2:
+		if offset+6 > len(data) {
+			return 0, errors.New("v2 b-tree index info truncated")
+		}
+		msg.BTreeV2NodeSize = sb.Endianness.Uint32(data[offset : offset+4])
+		msg.BTreeV2SplitPercent = data[offset+4]
+		msg.BTreeV2MergePercent = data[offset+5]
+		offset += 6
+
+	default:
+		return 0, fmt.Errorf("unsupported chunk index type: %d", msg.ChunkIndexType)
+	}
+
+	return offset, nil
 }
 
 // Helper function to read variable-sized unsigned integers.

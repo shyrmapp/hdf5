@@ -666,30 +666,20 @@ func (d *Dataset) readHyperslabChunked(
 		return []float64{}, nil
 	}
 
-	// Parse B-tree to get chunk addresses
-	btreeNode, err := core.ParseBTreeV1Node(
-		d.file.osFile,
-		layout.DataAddress,
-		d.file.sb.OffsetSize,
-		len(chunkDims),
-		chunkDims,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse chunk B-tree: %w", err)
-	}
-
-	// Build chunk index (scaled coordinates -> file address)
-	chunkIndex := make(map[string]chunkIndexEntry)
-	allChunks, err := btreeNode.CollectAllChunks(d.file.osFile, d.file.sb.OffsetSize, chunkDims)
+	// Collect chunk locations from the layout's chunk index (v1 B-tree for
+	// layout v3, modern chunk indexes for layout v4/v5).
+	allChunks, err := core.CollectChunks(d.file.osFile, layout, dataspace, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk index: %w", err)
 	}
 
+	// Build chunk index (scaled coordinates -> file address)
+	chunkIndex := make(map[string]chunkIndexEntry)
 	for _, chunk := range allChunks {
-		key := chunkCoordsToKey(chunk.Key.Scaled[:len(dims)])
+		key := chunkCoordsToKey(chunk.Scaled[:len(dims)])
 		chunkIndex[key] = chunkIndexEntry{
 			address: chunk.Address,
-			nbytes:  uint64(chunk.Key.Nbytes),
+			nbytes:  chunk.NBytes,
 		}
 	}
 
