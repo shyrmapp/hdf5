@@ -10,27 +10,23 @@ release; write output is validated with h5dump/h5diff/h5repack in CI.
 
 ## 📅 Planned
 
-### v0.15.x — Quick wins
+### Shipped in v0.15 (this release)
 
-- **LZF write support** — the pure-Go compressor exists in
-  `internal/writer/filter_lzf.go`; wire it to a public `WithLZFCompression`
-  option (h5py/PyTables compatible).
-- **float16 read** — decode `H5T_IEEE_F16LE/BE` datasets and attributes
-  (predefined since HDF5 1.14.4, common in ML-adjacent files).
-- **Public compound-write API** — a builder for compound datatypes so users
-  don't need internal packages.
-- **Soft/external link resolution** — resolve links on explicit access
-  (chain following, cycle detection, dangling-link errors).
+- ✅ LZF write (`WithLZFCompression`, h5py/PyTables compatible)
+- ✅ float16 read (`H5T_IEEE_F16LE/BE`)
+- ✅ Public compound-write API (`CompoundField`/`NewCompoundType`/
+  `CreateCompoundDatasetFromFields`)
+- ✅ Soft/external link resolution (`File.Resolve`, `SoftLink`/`ExternalLink`
+  objects, cycle detection)
+- ✅ Data layout v4/v5 read with all five modern chunk indexes — files
+  written under `H5F_LIBVER_LATEST` (h5py `libver="latest"`) now read
+- ✅ Complex datatype read (`Dataset.ReadComplex`)
 
-### v0.16.x — HDF5 2.x "latest" format read support
+### Remaining gaps (v0.16.x candidates)
 
-- **Data layout message v4** with the modern chunk indexes:
-  single chunk, implicit, fixed array, extensible array, v2 B-tree.
-  This is what currently blocks reading files written with
-  `H5F_LIBVER_LATEST` bounds (h5py `libver="latest"`, netCDF-4 defaults on
-  new toolchains).
-- **Complex datatypes** (datatype class 11, new in HDF5 2.0) — read as
-  `[]complex128`/`[]complex64`.
+- Paged fixed/extensible-array data blocks; v2 B-tree chunk index depth > 1
+- float16/complex in attributes and hyperslab selections
+- Layout v4 write support (currently read-only)
 
 ### v1.0.0 — Long-term support
 
