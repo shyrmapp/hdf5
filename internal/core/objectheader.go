@@ -82,7 +82,7 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	defer utils.ReleaseBuffer(prefix)
 
 	if _, err := r.ReadAt(prefix, offset); err != nil {
-		return nil, utils.WrapError("object header read failed", err)
+		return nil, fmt.Errorf("object header read failed: %w", err)
 	}
 
 	header := &ObjectHeader{}
@@ -118,12 +118,12 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	case 1:
 		header.Messages, header.Name, header.ReferenceCount, err = parseV1Header(r, address, sb)
 		if err != nil {
-			return nil, utils.WrapError("v1 header parse failed", err)
+			return nil, fmt.Errorf("v1 header parse failed: %w", err)
 		}
 	case 2:
 		header.Messages, header.Name, err = parseV2Header(r, address, header.Flags, sb, isBE)
 		if err != nil {
-			return nil, utils.WrapError("v2 header parse failed", err)
+			return nil, fmt.Errorf("v2 header parse failed: %w", err)
 		}
 		// For V2, reference count defaults to 1 (may be overridden by RefCount message)
 		header.ReferenceCount = 1
@@ -136,8 +136,14 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	// Check for RefCount message (V2 only) - overrides default
 	if header.Version == 2 {
 		for _, msg := range header.Messages {
-			if msg.Type == MsgRefCount && len(msg.Data) >= 4 {
-				// RefCount message is just a uint32
+			// RefCount message: version byte (0) + uint32 count.
+			if msg.Type == MsgRefCount && len(msg.Data) >= 5 && msg.Data[0] == 0 {
+				header.ReferenceCount = sb.Endianness.Uint32(msg.Data[1:5])
+				break
+			}
+			if msg.Type == MsgRefCount && len(msg.Data) == 4 {
+				// Files written by this library before v0.15 omitted the
+				// version byte; accept the bare uint32 layout.
 				header.ReferenceCount = sb.Endianness.Uint32(msg.Data[0:4])
 				break
 			}
@@ -218,7 +224,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(sizeBuf, int64(current)); err != nil {
-		return nil, "", utils.WrapError("chunk size read failed", err)
+		return nil, "", fmt.Errorf("chunk size read failed: %w", err)
 	}
 
 	var chunkSize uint64
@@ -266,7 +272,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
 			utils.ReleaseBuffer(headerBuf)
-			return nil, "", utils.WrapError("message header read failed", err)
+			return nil, "", fmt.Errorf("message header read failed: %w", err)
 		}
 
 		// Type is 1 byte, size is 2 bytes, flags is 1 byte
@@ -292,7 +298,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
 			utils.ReleaseBuffer(data)
-			return nil, "", utils.WrapError("message data read failed", err)
+			return nil, "", fmt.Errorf("message data read failed: %w", err)
 		}
 
 		if msgType == MsgName && len(data) > 1 {
@@ -320,7 +326,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 
 			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
 			if err != nil {
-				return nil, "", utils.WrapError("V2 continuation block parse failed", err)
+				return nil, "", fmt.Errorf("V2 continuation block parse failed: %w", err)
 			}
 
 			// Mark continuation messages so the write path can exclude them.
@@ -360,7 +366,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(sigBuf, int64(blockAddr)); err != nil {
-		return nil, "", utils.WrapError("OCHK signature read failed", err)
+		return nil, "", fmt.Errorf("OCHK signature read failed: %w", err)
 	}
 	if string(sigBuf) != "OCHK" {
 		return nil, "", fmt.Errorf("invalid OCHK signature: % x", sigBuf)
@@ -385,7 +391,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
 			utils.ReleaseBuffer(headerBuf)
-			return nil, "", utils.WrapError("OCHK message header read failed", err)
+			return nil, "", fmt.Errorf("OCHK message header read failed: %w", err)
 		}
 
 		msgType := MessageType(headerBuf[0])
@@ -406,7 +412,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
 			utils.ReleaseBuffer(data)
-			return nil, "", utils.WrapError("OCHK message data read failed", err)
+			return nil, "", fmt.Errorf("OCHK message data read failed: %w", err)
 		}
 
 		if msgType == MsgName && len(data) > 1 {

@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"compress/bzip2"
+	"compress/gzip"
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
@@ -240,18 +242,31 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 
 // applyDeflate decompresses GZIP/deflate compressed data.
 // HDF5 uses raw deflate (zlib), not gzip format.
+//
+// Compatibility fallback: releases of this library up to v0.14 wrote
+// gzip-wrapped (RFC 1952) streams instead of zlib (RFC 1950). Sniff the
+// gzip magic so those files stay readable.
 func applyDeflate(data []byte) ([]byte, error) {
-	reader, err := zlib.NewReader(io.NopCloser(io.NewSectionReader(
-		&bytesReaderAt{data}, 0, int64(len(data)))))
-	if err != nil {
-		return nil, fmt.Errorf("zlib reader creation failed: %w", err)
+	var reader io.ReadCloser
+	var err error
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		reader, err = gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader creation failed: %w", err)
+		}
+	} else {
+		reader, err = zlib.NewReader(io.NopCloser(io.NewSectionReader(
+			&bytesReaderAt{data}, 0, int64(len(data)))))
+		if err != nil {
+			return nil, fmt.Errorf("zlib reader creation failed: %w", err)
+		}
 	}
 	defer func() { _ = reader.Close() }()
 
 	// Read all decompressed data.
 	decompressed, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("zlib decompression failed: %w", err)
+		return nil, fmt.Errorf("deflate decompression failed: %w", err)
 	}
 
 	return decompressed, nil
@@ -296,12 +311,10 @@ func applyFletcher32(data []byte) ([]byte, error) {
 	}
 
 	// Fletcher32 checksum is appended at the end (4 bytes).
-	// Checksum verification deferred to v0.11.0-RC (feature-complete release).
-	// Current implementation strips checksum without validation.
+	// The checksum is stripped without validation.
 	// In practice, file system and HDF5 library corruption is extremely rare.
 	// For production use, consider external file integrity checks (SHA256, etc.).
 	// Reference: https://docs.hdfgroup.org/hdf5/latest/group___h5_z.html
-	// Target version: v0.11.0-RC (comprehensive data integrity features)
 	return data[:len(data)-4], nil
 }
 

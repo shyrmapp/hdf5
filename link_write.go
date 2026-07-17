@@ -43,11 +43,10 @@ import (
 //	}
 //	// Now /data/temperature and /data/temp_link point to the same dataset
 //
-// Limitations (MVP v0.11.5-beta):
+// Limitations:
 //   - Target must exist before creating link
 //   - Parent group must exist before creating link
 //   - Reference count stored in object header (v1) or RefCount message (v2)
-//   - No link deletion support yet (DeleteLink not implemented)
 //   - No circular link detection
 //
 // Reference: H5L.c - H5Lcreate_hard().
@@ -168,9 +167,12 @@ func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 		}
 	}
 
-	// Write entire object header back to disk
-	err := core.WriteObjectHeader(fw.writer, addr, oh, fw.file.sb)
-	if err != nil {
+	// Write entire object header back to disk. The RefCount message may have
+	// grown the header past its allocation at the end of the file, so use the
+	// bounds-checked writer that advances the allocator (and thus the
+	// superblock EOA on Close) — a bare WriteObjectHeader left the EOA 8
+	// bytes short and the C library rejected the file ("exceeds EOA").
+	if err := writeOHDRWithBoundsCheck(fw, addr, oh, fw.file.sb); err != nil {
 		return fmt.Errorf("failed to write v2 object header: %w", err)
 	}
 	return nil
@@ -178,18 +180,22 @@ func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 
 // ensureRefCountMessage ensures RefCount message exists and is updated.
 func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
+	// RefCount message body: version (1 byte, always 0) + 4-byte count.
+	// Reference: H5Orefcount.c - H5O__refcount_decode().
+
 	// Check if RefCount message already exists
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgRefCount && len(msg.Data) >= 4 {
-			// Update existing RefCount message data
-			fw.file.sb.Endianness.PutUint32(msg.Data[0:4], oh.ReferenceCount)
+		if msg.Type == core.MsgRefCount && len(msg.Data) >= 5 {
+			// Update existing RefCount message data (skip version byte)
+			fw.file.sb.Endianness.PutUint32(msg.Data[1:5], oh.ReferenceCount)
 			return nil
 		}
 	}
 
 	// Create new RefCount message
-	refCountData := make([]byte, 4)
-	fw.file.sb.Endianness.PutUint32(refCountData, oh.ReferenceCount)
+	refCountData := make([]byte, 5)
+	refCountData[0] = 0 // message version
+	fw.file.sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)
 
 	// Add message to header
 	err := core.AddMessageToObjectHeader(oh, core.MsgRefCount, refCountData)
@@ -239,8 +245,8 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 //	// This is allowed - target can be created later
 //
 // Limitations:
-//   - Symbol table format only (dense groups not yet supported)
-//   - No soft link resolution yet (reading soft links not implemented)
+//   - Symbol table format only (links cannot be added to dense-format groups)
+//   - Soft links are not resolved on read
 //   - No circular link detection
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 1 (Soft Link)
@@ -265,68 +271,13 @@ func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
 		}
 	}
 
-	// Create soft link message
-	linkMsg := &core.LinkMessage{
-		Version: 1,
-		Flags:   core.LinkFlagLinkTypeFieldBit | core.LinkFlagCharSetBit, // Bits 3 + 4 set
-		Type:    core.LinkTypeSoft,
-		CharSet: 0, // ASCII
-		Name:    linkName,
-		// LinkValue: target path as bytes (will be set below)
-	}
-
-	// Encode target path as link value
-	// Soft link format: 2-byte length + path string
-	targetPathBytes := []byte(targetPath)
-	if len(targetPathBytes) > 65535 {
-		return fmt.Errorf("target path too long: %d bytes (max 65535)", len(targetPathBytes))
-	}
-	linkValue := make([]byte, 2+len(targetPathBytes))
-	fw.file.sb.Endianness.PutUint16(linkValue[0:2], uint16(len(targetPathBytes))) //nolint:gosec // Validated above
-	copy(linkValue[2:], targetPathBytes)
-	linkMsg.LinkValue = linkValue
-
-	// Encode link message
-	linkMsgData, err := core.EncodeLinkMessage(linkMsg, fw.file.sb)
-	if err != nil {
-		return fmt.Errorf("failed to encode soft link message: %w", err)
-	}
-
-	// Create object header writer for the soft link
-	linkOHW := &core.ObjectHeaderWriter{
-		Version: 2, // Use v2 for modern format
-		Flags:   0,
-		Messages: []core.MessageWriter{
-			{
-				Type: core.MsgLinkMessage, // 0x0006 - Link message
-				Data: linkMsgData,
-			},
-		},
-	}
-
-	// Pre-allocate with padding for future attributes.
-	linkOHW.PadToSize(core.MinOHDRAllocSize)
-
-	// Calculate object header size
-	headerSize, err := calculateObjectHeaderSize(linkOHW)
-	if err != nil {
-		return fmt.Errorf("failed to calculate header size: %w", err)
-	}
-
-	// Allocate space for object header
-	linkAddr, err := fw.writer.Allocate(headerSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate space for soft link object header: %w", err)
-	}
-
-	// Write object header
-	_, err = linkOHW.WriteTo(fw.writer, linkAddr)
-	if err != nil {
-		return fmt.Errorf("failed to write soft link object header: %w", err)
-	}
-
-	// Add link to parent group's symbol table
-	if err := fw.linkToParent(parent, linkName, linkAddr); err != nil {
+	// In the symbol-table group format a soft link is NOT an object: it is a
+	// symbol table entry with cache type 2 (H5G_CACHED_SLINK), an undefined
+	// object header address, and the target path stored in the parent
+	// group's local heap. (An earlier implementation wrote a standalone
+	// object header holding a Link message — the C library could not
+	// classify that object and rejected the file.)
+	if err := fw.linkEntryToParent(parent, linkName, 0, targetPath); err != nil {
 		return fmt.Errorf("failed to add soft link to parent group: %w", err)
 	}
 
@@ -346,31 +297,6 @@ func validateSoftLinkTargetPath(path string) error {
 		return fmt.Errorf("target path cannot contain consecutive slashes (got %q)", path)
 	}
 	return nil
-}
-
-// resolveSoftLink follows a soft link and returns the target object address.
-//
-// **STATUS: NOT YET IMPLEMENTED (MVP v0.11.5-beta)** - Planned for v0.12.0
-//
-// Planned functionality:
-//   - Chain resolution (A→B→C): Follows multiple soft links
-//   - Cycle detection: Detects circular references (A→B→A)
-//   - Depth limiting: Maximum 32 resolution levels
-//   - Dangling links: Returns error if target not found
-//
-// Parameters:
-//   - linkAddr: Address of the soft link message
-//   - visitedPaths: Set of visited paths for cycle detection (pass nil to start)
-//
-// Returns:
-//   - uint64: Address of target object
-//   - error: if target not found, cycle detected, or max depth exceeded
-//
-// Internal use only - will be called when accessing soft link in v0.12.0.
-func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]bool) (uint64, error) {
-	_ = linkAddr
-	_ = visitedPaths
-	return 0, fmt.Errorf("soft link resolution not yet implemented (planned for v0.12.0)")
 }
 
 // CreateExternalLink creates a link to an object in another HDF5 file.
@@ -402,8 +328,8 @@ func (fw *FileWriter) resolveSoftLink(linkAddr uint64, visitedPaths map[string]b
 //   - File path stored as-is (absolute or relative)
 //
 // Limitations:
-//   - Symbol table format only (dense groups not yet supported)
-//   - No external link resolution yet (reading external links not implemented)
+//   - Symbol table format only (links cannot be added to dense-format groups)
+//   - External links are not resolved on read
 //   - No file caching or performance optimization
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)
@@ -536,38 +462,10 @@ func validateExternalFileName(fileName string) error {
 		return fmt.Errorf("file name cannot contain '..' (path traversal)")
 	}
 
-	// Check extension (warning-level check, not strict)
-	// In full v0.12.0 implementation, we would log a warning here if extension is not .h5 or .hdf5
-	// For now, we accept any extension to support custom file formats
+	// Extension is not checked strictly: any extension is accepted
+	// to support custom file formats.
 
 	return nil
-}
-
-// resolveExternalLink resolves an external link and returns the target object.
-//
-// **STATUS: NOT YET IMPLEMENTED (MVP v0.11.5-beta)** - Planned for v0.12.0
-//
-// Planned functionality:
-//   - Open external HDF5 file (cache for performance)
-//   - Resolve objectPath within external file
-//   - Handle file not found, object not found errors
-//   - Support absolute and relative file paths
-//   - Prevent circular external references
-//
-// Parameters:
-//   - linkAddr: Address of the external link message
-//   - visitedFiles: Set of visited files for cycle detection (pass nil to start)
-//
-// Returns:
-//   - *File: Opened external file (caller must cache/close)
-//   - uint64: Address of target object in external file
-//   - error: if file/object not found or cycle detected
-//
-// Internal use only - will be called when accessing external link in v0.12.0.
-func (fw *FileWriter) resolveExternalLink(linkAddr uint64, visitedFiles map[string]bool) (*File, uint64, error) {
-	_ = linkAddr
-	_ = visitedFiles
-	return nil, 0, fmt.Errorf("external link resolution not yet implemented in MVP v0.11.5-beta (planned for v0.12.0)")
 }
 
 // Note: The following methods are already implemented in group_write.go and are reused here:
