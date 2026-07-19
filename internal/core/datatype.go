@@ -170,6 +170,12 @@ func (dt *DatatypeMessage) IsFloat32() bool {
 	return dt.Class == DatatypeFloat && dt.Size == 4
 }
 
+// IsFloat16 checks if datatype is IEEE 754 half precision (16-bit),
+// H5T_IEEE_F16LE/BE (predefined since HDF5 1.14.4).
+func (dt *DatatypeMessage) IsFloat16() bool {
+	return dt.Class == DatatypeFloat && dt.Size == 2
+}
+
 // IsInt32 checks if datatype is 32-bit signed integer.
 func (dt *DatatypeMessage) IsInt32() bool {
 	return dt.Class == DatatypeFixed && dt.Size == 4

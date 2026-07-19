@@ -14,7 +14,7 @@
 
 A modern, pure Go library for reading and writing HDF5 files without CGo dependencies.
 
-Reads files in the default HDF5 format produced by any 1.x/2.x library (superblocks v0/v2/v3). Files written with the 2.x "latest" library-version bounds (data layout v4 chunk indexes), complex datatypes, and float16 are not yet supported — see the roadmap.
+Reads files produced by any 1.x/2.x library — including the 2.x "latest" format (data layout v4/v5 with modern chunk indexes), complex datatypes, and float16.
 
 ---
 
@@ -124,12 +124,15 @@ func main() {
   - Compact layout (data in object header)
   - Contiguous layout (sequential storage)
   - Chunked layout with B-tree indexing
+  - Layout v4/v5 chunk indexes (single chunk, implicit, fixed array, extensible array, v2 B-tree) — HDF5 2.x "latest" files
   - GZIP/Deflate compression
-  - LZF compression (h5py/PyTables compatible) ✨ NEW
+  - LZF compression (h5py/PyTables compatible, read + write)
   - Filter pipeline for compressed data
 
 - **Datatypes** (Read + Write):
   - **Basic types**: int8-64, uint8-64, float32/64
+  - **float16** (read): H5T_IEEE_F16LE/BE
+  - **Complex** (read): HDF5 2.0 class 11 as complex128/complex64
   - **Strings**: Fixed-length (null/space/null-padded), variable-length (via Global Heap)
   - **Advanced types**: Arrays, Enums, References (object/region), Opaque
   - **Compound types**: Struct-like with nested members
@@ -191,7 +194,7 @@ func main() {
 
 **Future Enhancements**:
 
-- ✅ LZF filter (read, Pure Go)
+- ✅ LZF filter (read + write, Pure Go)
 - ✅ BZIP2 filter (read only, stdlib)
 - ⚠️ SZIP filter (stub - requires libaec)
 - ⚠️ Thread-safety with mutexes + SWMR mode

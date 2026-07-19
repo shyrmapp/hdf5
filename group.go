@@ -109,6 +109,17 @@ func (d *Dataset) Read() ([]float64, error) {
 	return core.ReadDatasetFloat64(d.file.osFile, header, d.file.sb)
 }
 
+// ReadComplex reads a complex-number dataset (HDF5 2.0 datatype class 11)
+// and returns values as complex128. Both complex128 (float64 parts) and
+// complex64 (float32 parts) storage are supported.
+func (d *Dataset) ReadComplex() ([]complex128, error) {
+	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	if err != nil {
+		return nil, err
+	}
+	return core.ReadDatasetComplex(d.file.osFile, header, d.file.sb)
+}
+
 // ReadStrings reads string dataset values and returns them as string array.
 // Supports fixed-length strings (null-terminated, null-padded, space-padded).
 // Variable-length strings are not supported by this method; use ReadVLenBytes.
@@ -265,7 +276,8 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				}
 
 				// Process based on link type.
-				if linkMsg.IsHardLink() {
+				switch {
+				case linkMsg.IsHardLink():
 					// Load the object that this link points to.
 					child, err := loadObject(file, linkMsg.ObjectAddress, linkMsg.Name)
 					if err != nil {
@@ -274,10 +286,14 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 						continue
 					}
 					group.children = append(group.children, child)
-				} else if linkMsg.IsSoftLink() {
-					// Soft links (path-based symbolic links) are not resolved
-					// when loading groups; only hard links are followed.
-					continue
+				case linkMsg.IsSoftLink():
+					// Soft links surface as unresolved *SoftLink children;
+					// File.Resolve follows them on explicit access.
+					group.children = append(group.children,
+						&SoftLink{name: linkMsg.Name, target: linkMsg.TargetPath})
+				case linkMsg.IsExternalLink():
+					group.children = append(group.children,
+						&ExternalLink{name: linkMsg.Name, fileName: linkMsg.FileName, objectPath: linkMsg.ObjectPath})
 				}
 			}
 		}
@@ -317,7 +333,13 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 						continue
 					}
 					if linkMsg.IsSoftLink() {
-						// Soft links deferred — see compact-link branch.
+						group.children = append(group.children,
+							&SoftLink{name: linkMsg.Name, target: linkMsg.TargetPath})
+						continue
+					}
+					if linkMsg.IsExternalLink() {
+						group.children = append(group.children,
+							&ExternalLink{name: linkMsg.Name, fileName: linkMsg.FileName, objectPath: linkMsg.ObjectPath})
 						continue
 					}
 					if !linkMsg.IsHardLink() {
@@ -429,9 +451,15 @@ func loadTraditionalGroup(file *File, address uint64) (*Group, error) {
 
 	// Load children from SNOD entries.
 	for _, entry := range node.Entries {
-		// Skip soft links - they have CacheType=2 and ObjectAddress=HADDR_UNDEF.
-		// Following C library behavior: soft links are not resolved during file open.
+		// Soft links have CacheType=2 and ObjectAddress=HADDR_UNDEF; the
+		// target path lives in the local heap. Surface them as unresolved
+		// *SoftLink children (File.Resolve follows them on access).
 		if entry.IsSoftLink() {
+			link, err := softLinkFromHeap(heap, entry.LinkNameOffset, uint64(entry.CachedSoftLinkOffset))
+			if err != nil {
+				return nil, err
+			}
+			group.children = append(group.children, link)
 			continue
 		}
 
@@ -490,11 +518,17 @@ func (g *Group) loadChildren() error {
 	}
 
 	for _, entry := range entries {
-		// Skip soft links - they are symbolic links stored in old symbol table format.
-		// Soft links have CacheType=2 and ObjectAddress=HADDR_UNDEF (0xFFFFFFFFFFFFFFFF).
-		// The target path is stored in local heap at CachedSoftLinkOffset.
-		// Like the C library, we don't resolve soft links during file open - only on explicit access.
+		// Soft links are stored in the old symbol table format with
+		// CacheType=2 and ObjectAddress=HADDR_UNDEF (0xFFFFFFFFFFFFFFFF);
+		// the target path is in the local heap at CachedSoftLinkOffset.
+		// Like the C library, we don't resolve them during file open —
+		// they surface as *SoftLink children for explicit access.
 		if entry.IsSoftLink() {
+			link, err := softLinkFromHeap(heap, entry.LinkNameOffset, uint64(entry.CachedSoftLinkOffset))
+			if err != nil {
+				return fmt.Errorf("soft link load failed: %w", err)
+			}
+			g.children = append(g.children, link)
 			continue
 		}
 
@@ -511,8 +545,13 @@ func (g *Group) loadChildren() error {
 
 			// Add each entry from the SNOD to this group.
 			for _, snodEntry := range node.Entries {
-				// Skip soft links in SNOD entries (same as above).
+				// Soft links in SNOD entries surface as children (same as above).
 				if snodEntry.IsSoftLink() {
+					link, err := softLinkFromHeap(heap, snodEntry.LinkNameOffset, uint64(snodEntry.CachedSoftLinkOffset))
+					if err != nil {
+						return fmt.Errorf("SNOD soft link load failed: %w", err)
+					}
+					g.children = append(g.children, link)
 					continue
 				}
 
@@ -559,6 +598,56 @@ func (g *Group) loadChildren() error {
 		g.children = append(g.children, child)
 	}
 
+	return nil
+}
+
+// softLinkFromHeap materializes a soft-link symbol table entry: both the
+// link name and the target path are stored in the group's local heap.
+func softLinkFromHeap(heap *structures.LocalHeap, nameOffset, targetOffset uint64) (*SoftLink, error) {
+	name, err := heap.GetString(nameOffset)
+	if err != nil {
+		return nil, fmt.Errorf("soft link name read failed: %w", err)
+	}
+	target, err := heap.GetString(targetOffset)
+	if err != nil {
+		return nil, fmt.Errorf("soft link target read failed: %w", err)
+	}
+	return &SoftLink{name: name, target: target}, nil
+}
+
+// linkFromWrapperHeader detects standalone link objects: CreateExternalLink
+// stores an external link as its own object header holding a single Link
+// message named after the link itself (symbol-table groups cannot hold
+// external links directly). Returns the materialized link, or nil if the
+// header is a regular group.
+func linkFromWrapperHeader(file *File, header *core.ObjectHeader, name string) Object {
+	var linkMsg *structures.LinkMessage
+	count := 0
+	for _, msg := range header.Messages {
+		if msg.Type != core.MsgLinkMessage {
+			continue
+		}
+		count++
+		if count > 1 {
+			return nil // Multiple links: a genuine new-style group.
+		}
+		parsed, err := structures.ParseLinkMessage(msg.Data, file.sb)
+		if err != nil {
+			return nil
+		}
+		linkMsg = parsed
+	}
+
+	// A wrapper holds exactly one non-hard link named like the object itself.
+	if linkMsg == nil || linkMsg.IsHardLink() || linkMsg.Name != name {
+		return nil
+	}
+	if linkMsg.IsSoftLink() {
+		return &SoftLink{name: linkMsg.Name, target: linkMsg.TargetPath}
+	}
+	if linkMsg.IsExternalLink() {
+		return &ExternalLink{name: linkMsg.Name, fileName: linkMsg.FileName, objectPath: linkMsg.ObjectPath}
+	}
 	return nil
 }
 
@@ -625,6 +714,11 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 
 	switch header.Type {
 	case core.ObjectTypeGroup:
+		// Standalone soft/external link objects carry a single Link message
+		// and classify as groups; materialize them as link objects instead.
+		if link := linkFromWrapperHeader(file, header, name); link != nil {
+			return link, nil
+		}
 		group, err := loadGroup(file, address)
 		if err != nil {
 			return nil, err

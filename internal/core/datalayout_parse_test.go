@@ -36,8 +36,8 @@ func TestParseDataLayoutMessage(t *testing.T) {
 			errContains: "unsupported data layout version",
 		},
 		{
-			name:        "unsupported version 5",
-			data:        []byte{0x05, 0x01},
+			name:        "unsupported version 6",
+			data:        []byte{0x06, 0x01},
 			wantErr:     true,
 			errContains: "unsupported data layout version",
 		},
@@ -113,6 +113,34 @@ func TestParseDataLayoutMessage(t *testing.T) {
 			}(),
 			wantVersion: 4,
 			wantClass:   LayoutContiguous,
+			wantErr:     false,
+		},
+		{
+			// Byte-for-byte layout message of testdata/layout_v4/v4_ext.h5
+			// (HDF5 2.1.1, extensible array chunk index).
+			name: "version 4 chunked extensible array",
+			data: []byte{
+				0x04, 0x02, 0x00, 0x02, 0x01, 0x19, 0x04, // header, dims [25,4]
+				0x04, 0x20, 0x04, 0x04, 0x10, 0x0a, // index type + EA params
+				0xdf, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // index address
+			},
+			wantVersion: 4,
+			wantClass:   LayoutChunked,
+			wantErr:     false,
+		},
+		{
+			// Byte-for-byte layout message of testdata/layout_v4/v4_single_gz.h5
+			// (HDF5 2.1.1, filtered single chunk index).
+			name: "version 5 chunked single chunk filtered",
+			data: []byte{
+				0x05, 0x02, 0x02, 0x02, 0x01, 0x32, 0x04, // header, dims [50,4]
+				0x01,                                           // single chunk index
+				0x57, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // filtered size 87
+				0x00, 0x00, 0x00, 0x00, // filter mask
+				0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk address
+			},
+			wantVersion: 5,
+			wantClass:   LayoutChunked,
 			wantErr:     false,
 		},
 		{
