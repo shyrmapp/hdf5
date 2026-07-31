@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Compression bombs are now bounded by the chunk's own size.** Every
+  decompressor read its stream with `io.ReadAll`, so a chunk of a few KiB
+  declaring gigabytes of output was faithfully buffered. An HDF5 chunk is
+  fixed-size, edge chunks included, so the reader already knows exactly how
+  many bytes a chunk must expand to; anything past that is malformed however
+  well-formed the zlib framing looks. `ApplyFilters` now takes that size and
+  enforces it during decompression, for deflate, bzip2 and LZF.
+
+  This is a tighter bound than the decompression *ratio* limit SECURITY.md
+  previously (and falsely) claimed: it comes from the file's own declared
+  geometry rather than a guessed multiplier, so it needs no tuning and has no
+  false positives on legitimately well-compressing data.
+
+  The hand-rolled LZF decompressor needed its own guard, since it builds output
+  in a loop rather than through an `io.Reader` and each backreference can emit
+  up to 264 bytes.
+
 - **Unbounded allocation on whole-dataset reads (DoS).** A dataset's declared
   element count comes from the file and was never checked before allocating.
   The official corpus' `tbigdims.h5` — 6 KiB on disk — declares 4294967306

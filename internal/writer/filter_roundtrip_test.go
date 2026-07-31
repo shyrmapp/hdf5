@@ -16,7 +16,7 @@ import (
 // This is deliberately not a writer-internal inverse. The writer has no Remove();
 // the only decoder that matters is the one core uses on real files, so that is
 // what the write path is checked against.
-func decodeWithReader(t *testing.T, fp *FilterPipeline, data []byte) []byte {
+func decodeWithReader(t *testing.T, fp *FilterPipeline, data []byte, uncompressed int) []byte {
 	t.Helper()
 
 	msg, err := fp.EncodePipelineMessage()
@@ -25,7 +25,7 @@ func decodeWithReader(t *testing.T, fp *FilterPipeline, data []byte) []byte {
 	parsed, err := core.ParseFilterPipelineMessage(msg)
 	require.NoError(t, err)
 
-	out, err := parsed.ApplyFilters(data, 0)
+	out, err := parsed.ApplyFilters(data, 0, uint64(uncompressed))
 	require.NoError(t, err)
 	return out
 }
@@ -73,7 +73,7 @@ func TestFilterRoundTripAgainstReader(t *testing.T) {
 			encoded, err := fp.Apply(original)
 			require.NoError(t, err)
 
-			require.Equal(t, original, decodeWithReader(t, fp, encoded))
+			require.Equal(t, original, decodeWithReader(t, fp, encoded, len(original)))
 		})
 	}
 }
@@ -87,7 +87,7 @@ func TestGZIPCompressionLevelsRoundTrip(t *testing.T) {
 		encoded, err := fp.Apply(original)
 		require.NoError(t, err)
 		require.Less(t, len(encoded), len(original), "level %d should compress", level)
-		require.Equal(t, original, decodeWithReader(t, fp, encoded))
+		require.Equal(t, original, decodeWithReader(t, fp, encoded, len(original)))
 	}
 }
 
@@ -119,7 +119,7 @@ func TestLZFCompressPatterns(t *testing.T) {
 				require.Empty(t, encoded)
 				return
 			}
-			require.Equal(t, data, decodeWithReader(t, fp, encoded))
+			require.Equal(t, data, decodeWithReader(t, fp, encoded, len(data)))
 		})
 	}
 }

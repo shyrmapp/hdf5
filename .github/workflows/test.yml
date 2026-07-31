@@ -111,5 +111,5 @@ jobs:
     - name: Run golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
-        version: latest
+        version: v2.12.2  # pinned: `latest` lets a linter release turn main red with no commit
         args: --timeout=5m

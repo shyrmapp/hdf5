@@ -59,6 +59,11 @@ Other defenses:
 - Hyperslab bounds validation, including overflow in stride arithmetic
 - Soft-link cycle detection, capped at 32 hops (`maxSoftLinkHops`)
 - Datatype nesting capped at 32 levels (`maxDatatypeNesting`)
+- Decompression bounded by the chunk's own uncompressed size. An HDF5 chunk is
+  fixed-size — edge chunks included — so the reader knows exactly how many
+  bytes a chunk must expand to, and a stream producing more is rejected mid-
+  decompression rather than buffered. This bounds compression bombs by the
+  file's own declared geometry rather than by a guessed ratio.
 - Whole-dataset reads size-checked before allocating, against the memory the
   call would need rather than the bytes on disk (reading int8 through `Read()`
   yields float64, 8x wider). Go reports allocation failure as an unrecoverable
@@ -83,11 +88,6 @@ Other defenses:
 
 These are real and unmitigated. Handle them yourself if they matter to you:
 
-- **No decompression ratio limit.** A compression bomb — a small GZIP or LZF
-  chunk that expands enormously — is bounded by the whole-dataset read limit
-  and by `MaxChunkSize` (1 GiB per chunk), but not by a ratio. Raising
-  `WithMaxReadBytes` raises this exposure too. Bound the input size yourself
-  before opening untrusted files.
 - **No global object-count limit** during traversal. A file declaring an
   enormous number of groups or datasets will allocate accordingly.
 - **Group traversal is not depth-limited.** Only soft-link chains and datatype
