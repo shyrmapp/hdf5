@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // ChunkLocation describes one stored chunk located through a version 4/5 data

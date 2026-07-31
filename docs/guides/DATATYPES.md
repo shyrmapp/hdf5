@@ -515,7 +515,7 @@ package main
 
 import (
     "log"
-    "github.com/scigolib/hdf5"
+    "github.com/shyrmapp/hdf5"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/scigolib/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // CompoundField describes one member of a compound (struct-like) datatype.

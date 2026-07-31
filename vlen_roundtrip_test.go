@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/scigolib/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // TestVLenUint8_RoundTrip writes VLenUint8 data, closes the file, reopens it,

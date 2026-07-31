@@ -8,7 +8,7 @@ import (
 )
 
 // TestOpenForWrite_CreateGroup_Issue50 reproduces the exact panic reported
-// in https://github.com/scigolib/hdf5/issues/50:
+// in https://github.com/shyrmapp/hdf5/issues/50:
 //
 //	fw, _ := hdf5.OpenForWrite(filename, hdf5.OpenReadWrite)
 //	fw.CreateGroup("/example")  // panic: assignment to entry in nil map

@@ -6,9 +6,9 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/scigolib/hdf5/internal/core"
-	"github.com/scigolib/hdf5/internal/structures"
-	"github.com/scigolib/hdf5/internal/writer"
+	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/structures"
+	"github.com/shyrmapp/hdf5/internal/writer"
 )
 
 // Datatype represents HDF5 datatype for creating datasets.

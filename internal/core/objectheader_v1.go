@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // parseV1Header parses a version 1 object header.

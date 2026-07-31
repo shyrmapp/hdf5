@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/scigolib/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // Fractal heap write constants.

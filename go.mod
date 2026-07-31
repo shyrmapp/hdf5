@@ -1,4 +1,4 @@
-module github.com/scigolib/hdf5
+module github.com/shyrmapp/hdf5
 
 go 1.25
 

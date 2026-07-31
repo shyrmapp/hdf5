@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/scigolib/hdf5"
+	"github.com/shyrmapp/hdf5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
