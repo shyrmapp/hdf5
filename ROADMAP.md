@@ -1,6 +1,6 @@
 # HDF5 Go Library - Development Roadmap
 
-**Current version**: v0.16.0 (see [CHANGELOG.md](CHANGELOG.md) for release history)
+**Current version**: v0.17.0 (see [CHANGELOG.md](CHANGELOG.md) for release history)
 
 ## 🎯 Vision
 
@@ -22,7 +22,7 @@ release; write output is validated with h5dump/h5diff/h5repack in CI.
   written under `H5F_LIBVER_LATEST` (h5py `libver="latest"`) now read
 - ✅ Complex datatype read (`Dataset.ReadComplex`)
 
-### Remaining gaps (v0.17.x candidates)
+### Remaining gaps (v0.18.x candidates)
 
 - Paged fixed/extensible-array data blocks; v2 B-tree chunk index depth > 1
 - float16/complex in attributes and hyperslab selections

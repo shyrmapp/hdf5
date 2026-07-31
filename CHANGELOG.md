@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [v0.17.0] - 2026-07-31
 
 ### Security
 
@@ -2181,11 +2181,11 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 ## Links
 
 - **Repository**: https://github.com/shyrmapp/hdf5
-- **Documentation**: https://github.com/shyrmapp/hdf5/tree/main/docs
+- **Architecture**: https://github.com/shyrmapp/hdf5/blob/main/docs/architecture/OVERVIEW.md
 - **API Reference**: https://pkg.go.dev/github.com/shyrmapp/hdf5
 - **Issues**: https://github.com/shyrmapp/hdf5/issues
 - **Roadmap**: https://github.com/shyrmapp/hdf5/blob/main/ROADMAP.md
 
 ---
 
-_Last Updated: 2025-10-29_
+_Last Updated: 2026-07-31_
