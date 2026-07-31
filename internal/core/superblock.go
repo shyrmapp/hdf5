@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // HDF5 file signature and supported superblock versions.

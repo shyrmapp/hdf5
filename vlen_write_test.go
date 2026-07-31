@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/scigolib/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // TestWriteVLenStrings tests writing variable-length strings.

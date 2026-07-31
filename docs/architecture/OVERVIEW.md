@@ -21,7 +21,7 @@ This library is designed with the following principles:
 ## 📦 Package Structure
 
 ```
-github.com/scigolib/hdf5/
+github.com/shyrmapp/hdf5/
 │
 ├── file.go                    # Public API: File read operations
 ├── file_write.go              # Public API: File write operations

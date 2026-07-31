@@ -27,7 +27,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/scigolib/hdf5"
+    "github.com/shyrmapp/hdf5"
 )
 
 func main() {
@@ -728,7 +728,7 @@ import (
     "fmt"
     "log"
     "math"
-    "github.com/scigolib/hdf5"
+    "github.com/shyrmapp/hdf5"
 )
 
 func main() {
@@ -788,7 +788,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/scigolib/hdf5"
+    "github.com/shyrmapp/hdf5"
 )
 
 func main() {

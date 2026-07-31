@@ -1880,11 +1880,11 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 
 ## Links
 
-- **Repository**: https://github.com/scigolib/hdf5
-- **Documentation**: https://github.com/scigolib/hdf5/tree/main/docs
-- **API Reference**: https://pkg.go.dev/github.com/scigolib/hdf5
-- **Issues**: https://github.com/scigolib/hdf5/issues
-- **Roadmap**: https://github.com/scigolib/hdf5/blob/main/ROADMAP.md
+- **Repository**: https://github.com/shyrmapp/hdf5
+- **Documentation**: https://github.com/shyrmapp/hdf5/tree/main/docs
+- **API Reference**: https://pkg.go.dev/github.com/shyrmapp/hdf5
+- **Issues**: https://github.com/shyrmapp/hdf5/issues
+- **Roadmap**: https://github.com/shyrmapp/hdf5/blob/main/ROADMAP.md
 
 ---
 

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/scigolib/hdf5/internal/core"
-	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // HyperslabSelection represents a rectangular selection in N-dimensional space.

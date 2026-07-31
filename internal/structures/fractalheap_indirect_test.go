@@ -8,7 +8,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/scigolib/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // TestIndirectBlockCreation tests NewWritableIndirectBlock initialization.

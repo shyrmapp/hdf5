@@ -48,4 +48,4 @@ release; write output is validated with h5dump/h5diff/h5repack in CI.
 - [CHANGELOG.md](CHANGELOG.md) — full release history
 - [UPSTREAM.md](UPSTREAM.md) — format-spec and C-library version tracking
 - [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) — internals
-- [GitHub Discussions](https://github.com/scigolib/hdf5/discussions) — support
+- [GitHub Discussions](https://github.com/shyrmapp/hdf5/discussions) — support

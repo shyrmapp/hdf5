@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/scigolib/hdf5"
+	"github.com/shyrmapp/hdf5"
 )
 
 func TestResizeRoundTrip1D(t *testing.T) {

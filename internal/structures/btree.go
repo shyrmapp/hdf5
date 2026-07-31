@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/scigolib/hdf5/internal/core"
-	"github.com/scigolib/hdf5/internal/utils"
+	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // BTreeEntry represents a single entry in a B-tree node for symbol table indexing.
