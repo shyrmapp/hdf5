@@ -252,11 +252,21 @@ func extractString(data []byte, paddingType uint8) string {
 }
 
 // readVariableString reads a variable-length string from the Global Heap.
-// The data contains a Global Heap reference: heap_address (offset_size bytes) + object_index (4 bytes).
+//
+// An on-disk vlen element is a 4-byte length followed by the global heap ID
+// (heap address, offset_size bytes, then a 4-byte object index). The length
+// prefix is skipped: the true length comes from the heap object itself, and
+// reading the reference from offset 0 would fold the length into the address.
 func readVariableString(r io.ReaderAt, data []byte, sb *Superblock) (string, error) {
-	// Parse the global heap reference.
 	offsetSize := int(sb.OffsetSize)
-	ref, err := ParseGlobalHeapReference(data, offsetSize)
+
+	const lengthPrefix = 4
+	if len(data) < lengthPrefix+offsetSize+4 {
+		return "", fmt.Errorf("vlen string element too short: got %d bytes, need %d",
+			len(data), lengthPrefix+offsetSize+4)
+	}
+
+	ref, err := ParseGlobalHeapReference(data[lengthPrefix:], offsetSize)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse global heap reference: %w", err)
 	}

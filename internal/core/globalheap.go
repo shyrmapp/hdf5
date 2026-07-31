@@ -200,6 +200,7 @@ func ParseGlobalHeapReference(data []byte, offsetSize int) (*GlobalHeapReference
 		heapAddr = uint64(binary.LittleEndian.Uint32(data[0:4]))
 	}
 
+	//nolint:gosec // G602: len(data) >= offsetSize+4 checked above
 	objIndex := binary.LittleEndian.Uint32(data[offsetSize : offsetSize+4])
 
 	return &GlobalHeapReference{

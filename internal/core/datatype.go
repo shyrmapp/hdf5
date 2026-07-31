@@ -45,7 +45,7 @@ type DatatypeMessage struct {
 //     - Skip array info (28 bytes for v1, not present in v3)
 //     - Recursively calculate member datatype size
 //  3. Return total properties length
-func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
+func calculateCompoundPropsLen(properties []byte, version uint8, depth int) (int, error) {
 	// Version 1 or 2: member count is embedded in ClassBitField (not in properties)
 	// This is complex, so for now return error to use fallback
 	if version != 3 {
@@ -82,7 +82,7 @@ func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
 		}
 
 		// Recursively calculate member datatype size
-		memberDt, err := ParseDatatypeMessage(properties[offset:])
+		memberDt, err := parseDatatypeMessage(properties[offset:], depth)
 		if err != nil {
 			return 0, fmt.Errorf("member %d: failed to parse datatype: %w", i, err)
 		}
@@ -93,8 +93,129 @@ func calculateCompoundPropsLen(properties []byte, version uint8) (int, error) {
 	return offset, nil
 }
 
+// datatypePropsLen returns the exact byte length of a datatype message's
+// property section. The bool reports whether the length could be determined;
+// when false the caller falls back to "all remaining bytes".
+//
+// props is everything after the 8-byte header.
+func datatypePropsLen(
+	class DatatypeClass, version uint8, classBitField, size uint32, props []byte, depth int,
+) (int, bool) {
+	switch class {
+	case DatatypeFixed, DatatypeBitfield:
+		return 4, true // bit offset + precision
+	case DatatypeFloat:
+		return 12, true // byte order, padding, exponent, mantissa
+	case DatatypeTime:
+		return 2, true
+	case DatatypeString:
+		// Padding and character set live in the class bit field.
+		return 0, true
+	case DatatypeReference:
+		// Versions 1-3 carry no properties. Version 4 (HDF5 2.0) does.
+		return 0, version < 4
+	case DatatypeOpaque:
+		// ASCII tag, already padded to a multiple of 8.
+		return int(classBitField & 0xFF), true
+	case DatatypeVarLen, DatatypeComplex:
+		// Properties are exactly the base datatype message.
+		return nestedDatatypeLen(props, depth)
+	case DatatypeArray:
+		return arrayPropsLen(version, props, depth)
+	case DatatypeEnum:
+		return enumPropsLen(version, classBitField, size, props, depth)
+	case DatatypeCompound:
+		n, err := calculateCompoundPropsLen(props, version, depth+1)
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// nestedDatatypeLen returns the total size of the datatype message at the head
+// of props, header included.
+func nestedDatatypeLen(props []byte, depth int) (int, bool) {
+	base, err := parseDatatypeMessage(props, depth+1)
+	if err != nil {
+		return 0, false
+	}
+	return 8 + len(base.Properties), true
+}
+
+// arrayPropsLen sizes array properties: dimensionality, dimension sizes, then
+// the base datatype. Version 2 dropped the permutation indices and version 3
+// dropped the reserved bytes.
+func arrayPropsLen(version uint8, props []byte, depth int) (int, bool) {
+	if len(props) < 1 {
+		return 0, false
+	}
+	ndims := int(props[0])
+	offset := 1
+	if version < 3 {
+		offset += 3 // reserved
+	}
+	offset += ndims * 4 // dimension sizes
+	if version < 2 {
+		offset += ndims * 4 // permutation indices
+	}
+	if offset > len(props) {
+		return 0, false
+	}
+
+	baseLen, ok := nestedDatatypeLen(props[offset:], depth)
+	if !ok {
+		return 0, false
+	}
+	return offset + baseLen, true
+}
+
+// enumPropsLen sizes enum properties: the base datatype, then one
+// null-terminated name per member, then one value per member.
+func enumPropsLen(version uint8, classBitField, size uint32, props []byte, depth int) (int, bool) {
+	nmembs := int(classBitField & 0xFFFF)
+
+	offset, ok := nestedDatatypeLen(props, depth)
+	if !ok {
+		return 0, false
+	}
+
+	for range nmembs {
+		end := offset
+		for end < len(props) && props[end] != 0 {
+			end++
+		}
+		if end >= len(props) {
+			return 0, false
+		}
+		nameLen := end - offset + 1 // include the null terminator
+		if version < 3 {
+			nameLen = (nameLen + 7) / 8 * 8 // padded to a multiple of 8 before v3
+		}
+		offset += nameLen
+	}
+
+	offset += nmembs * int(size) // values, one base-type-sized each
+	if offset > len(props) {
+		return 0, false
+	}
+	return offset, true
+}
+
+// maxDatatypeNesting bounds recursion when walking nested datatype messages
+// (compound members, and the base types of vlen/array/enum/complex). Real
+// files nest a handful deep; a crafted file could otherwise recurse until the
+// stack blows.
+const maxDatatypeNesting = 32
+
 // ParseDatatypeMessage parses a datatype message from header message data.
 func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
+	return parseDatatypeMessage(data, 0)
+}
+
+func parseDatatypeMessage(data []byte, depth int) (*DatatypeMessage, error) {
+	if depth > maxDatatypeNesting {
+		return nil, fmt.Errorf("datatype nesting exceeds %d levels", maxDatatypeNesting)
+	}
 	if len(data) < 8 {
 		return nil, errors.New("datatype message too short")
 	}
@@ -109,39 +230,12 @@ func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
 	// Bytes 4-7: Size.
 	size := binary.LittleEndian.Uint32(data[4:8])
 
-	// Calculate property size based on class
-	// This is needed for inline parsing (e.g., compound members)
-	var propsLen int
-	switch class {
-	case DatatypeFixed: // Integer
-		propsLen = 4 // bit offset + precision
-	case DatatypeFloat:
-		propsLen = 12 // full IEEE 754 info
-	case DatatypeBitfield:
-		propsLen = 4
-	case DatatypeTime:
-		propsLen = 2
-	case DatatypeString:
-		// String properties are variable, but typically minimal
-		// For now, take all remaining (safe for top-level parsing)
-		propsLen = len(data) - 8
-	case DatatypeCompound:
-		// Compound types: properties are variable length and self-describing
-		// For inline parsing (nested compounds), we must calculate the exact size
-		// by walking through the member definitions
-		calculatedLen, err := calculateCompoundPropsLen(data[8:], version)
-		if err != nil {
-			// Fallback: take all remaining (for backward compatibility)
-			propsLen = len(data) - 8
-		} else {
-			propsLen = calculatedLen
-		}
-	case DatatypeArray, DatatypeEnum, DatatypeReference, DatatypeOpaque, DatatypeVarLen:
-		// Complex types: properties are variable length
-		// For inline parsing, take all remaining
-		propsLen = len(data) - 8
-	default:
-		// Unknown type: take all remaining
+	// A top-level datatype message owns every remaining byte, so "all
+	// remaining" is correct there and is the fallback below. Inline it is not:
+	// a member's properties must stop where the member stops, or the caller's
+	// `offset += 8 + len(Properties)` skips past everything that follows.
+	propsLen, exact := datatypePropsLen(class, version, classBitField, size, data[8:], depth)
+	if !exact {
 		propsLen = len(data) - 8
 	}
 
@@ -150,7 +244,6 @@ func ParseDatatypeMessage(data []byte) (*DatatypeMessage, error) {
 		propsLen = len(data) - 8
 	}
 
-	//nolint:gosec // G602: bounds checked above (8+propsLen <= len(data))
 	return &DatatypeMessage{
 		Class:         class,
 		Version:       version,

@@ -56,6 +56,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`core.ParseFilterPipelineMessage` + `ApplyFilters`) rather than a
   writer-internal inverse, so they verify writer/reader agreement.
 
+### Fixed
+
+- **Compound datatypes lost every member after a variable-length one.**
+  `ParseDatatypeMessage` assigned "all remaining bytes" as the properties of
+  vlen, array, enum, opaque and string datatypes. That is correct for a
+  top-level message, which owns the rest of the buffer, but inside a compound
+  it swallowed the following members — the walker advances by
+  `8 + len(Properties)` and so skipped past the end, reporting
+  `member N name not null-terminated`. Property lengths are now computed
+  exactly per class, falling back to "all remaining" only where the layout
+  cannot be determined. Only files where such a member is not last were
+  affected, which is why the existing corpus did not catch it.
+- **Variable-length strings in compound members read a garbage heap address.**
+  `readVariableString` parsed the global heap reference from offset 0, folding
+  the 4-byte length prefix into the address. It now skips the prefix, matching
+  the dataset and attribute vlen paths, and rejects short elements.
+  `testdata/vlen_strings.h5:/compound_with_vlen` now decodes identically to
+  `h5dump`.
+
+### Security
+
+- Datatype parsing is now depth-limited (`maxDatatypeNesting = 32`). Nested
+  compound/vlen/array/enum base types recursed without a bound, so a crafted
+  file could exhaust the stack.
+
 ---
 
 ## [v0.16.0] - 2026-07-31
