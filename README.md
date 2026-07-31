@@ -4,7 +4,6 @@
 
 [![Version](https://img.shields.io/github/v/tag/shyrmapp/hdf5?style=flat-square&logo=github&color=blue&label=version)](https://github.com/shyrmapp/hdf5/tags)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/shyrmapp/hdf5?style=flat-square&logo=go)](https://go.dev)
-[![Go Report Card](https://goreportcard.com/badge/github.com/shyrmapp/hdf5?style=flat-square)](https://goreportcard.com/report/github.com/shyrmapp/hdf5)
 [![CI](https://img.shields.io/github/actions/workflow/status/shyrmapp/hdf5/test.yml?branch=main&style=flat-square&logo=github&label=tests)](https://github.com/shyrmapp/hdf5/actions)
 [![License](https://img.shields.io/github/license/shyrmapp/hdf5?style=flat-square&color=blue)](https://github.com/shyrmapp/hdf5/blob/main/LICENSE)
 
