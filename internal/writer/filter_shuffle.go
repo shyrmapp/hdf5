@@ -94,39 +94,6 @@ func (f *ShuffleFilter) Apply(data []byte) ([]byte, error) {
 	return shuffled, nil
 }
 
-// Remove reverses the byte shuffle (unshuffle).
-//
-// This operation reverses Apply, restoring the original byte order.
-//
-// Example with elementSize=4, 3 elements:
-//
-//	Input:  [a1 b1 c1][a2 b2 c2][a3 b3 c3][a4 b4 c4]
-//	Output: [a1 a2 a3 a4][b1 b2 b3 b4][c1 c2 c3 c4]
-func (f *ShuffleFilter) Remove(data []byte) ([]byte, error) {
-	dataLen := uint32(len(data)) //nolint:gosec // G115: Data length validated by HDF5, fits in uint32
-	if dataLen == 0 {
-		return data, nil
-	}
-
-	if dataLen%f.elementSize != 0 {
-		return nil, fmt.Errorf("data length %d not multiple of element size %d", dataLen, f.elementSize)
-	}
-
-	numElements := dataLen / f.elementSize
-	unshuffled := make([]byte, dataLen)
-
-	// Unshuffle: reverse the shuffle operation
-	for byteIndex := uint32(0); byteIndex < f.elementSize; byteIndex++ {
-		for elemIndex := uint32(0); elemIndex < numElements; elemIndex++ {
-			srcIndex := byteIndex*numElements + elemIndex
-			dstIndex := elemIndex*f.elementSize + byteIndex
-			unshuffled[dstIndex] = data[srcIndex]
-		}
-	}
-
-	return unshuffled, nil
-}
-
 // Encode returns the filter parameters for the Pipeline message.
 //
 // For shuffle, the client data contains a single value: the element size.

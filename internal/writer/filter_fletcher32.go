@@ -2,7 +2,6 @@ package writer
 
 import (
 	"encoding/binary"
-	"fmt"
 )
 
 // Fletcher32Filter implements Fletcher32 checksum (FilterID = 3).
@@ -46,35 +45,6 @@ func (f *Fletcher32Filter) Apply(data []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(result[len(data):], checksum)
 
 	return result, nil
-}
-
-// Remove verifies and strips the Fletcher32 checksum.
-//
-// This method:
-//  1. Extracts the 4-byte checksum from the end of data
-//  2. Calculates the checksum of the original data
-//  3. Verifies they match
-//  4. Returns the original data without the checksum
-//
-// Returns an error if the checksum doesn't match (data corruption detected).
-func (f *Fletcher32Filter) Remove(data []byte) ([]byte, error) {
-	if len(data) < 4 {
-		return nil, fmt.Errorf("data too short for fletcher32: %d bytes", len(data))
-	}
-
-	// Extract checksum (last 4 bytes)
-	dataLen := len(data) - 4
-	originalData := data[:dataLen]
-	storedChecksum := binary.LittleEndian.Uint32(data[dataLen:])
-
-	// Verify checksum
-	calculatedChecksum := calculateFletcher32(originalData)
-	if calculatedChecksum != storedChecksum {
-		return nil, fmt.Errorf("fletcher32 checksum mismatch: stored=%08x, calculated=%08x",
-			storedChecksum, calculatedChecksum)
-	}
-
-	return originalData, nil
 }
 
 // Encode returns the filter parameters for the Pipeline message.

@@ -1,3 +1,5 @@
+// Package utils provides overflow-checked arithmetic and size validation
+// shared by the HDF5 parsers.
 package utils
 
 import (

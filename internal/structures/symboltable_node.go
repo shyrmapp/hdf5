@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // SymbolTableNode represents a Symbol Table Node (SNOD structure).
@@ -26,8 +25,7 @@ type SymbolTableNode struct {
 // - Then symbol table entries follow (each entry is offsetSize*2 + 8 + 16 bytes).
 func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*SymbolTableNode, error) {
 	// Read header (8 bytes).
-	header := utils.GetBuffer(8)
-	defer utils.ReleaseBuffer(header)
+	header := make([]byte, 8)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(header, int64(address)); err != nil {
@@ -76,8 +74,7 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 
 	// Read all entries.
 	dataSize := int(numSymbols) * entrySize
-	data := utils.GetBuffer(dataSize)
-	defer utils.ReleaseBuffer(data)
+	data := make([]byte, dataSize)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	entryOffset := int64(address) + 8 // After header.

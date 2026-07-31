@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
-	"io"
 )
 
 // HDF5 filter label for DEFLATE / GZIP compression. Extracted as a
@@ -77,28 +76,6 @@ func (f *GZIPFilter) Apply(data []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// Remove decompresses zlib-compressed data.
-// Returns the original uncompressed data.
-//
-// This method reverses the Apply operation, restoring the original data.
-func (f *GZIPFilter) Remove(data []byte) ([]byte, error) {
-	buf := bytes.NewReader(data)
-
-	r, err := zlib.NewReader(buf)
-	if err != nil {
-		return nil, fmt.Errorf("zlib reader creation failed: %w", err)
-	}
-	defer func() { _ = r.Close() }() // Ignore error in defer
-
-	// Decompress data
-	decompressed, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("zlib decompression failed: %w", err)
-	}
-
-	return decompressed, nil
 }
 
 // Encode returns the filter parameters for the Pipeline message.

@@ -7,7 +7,6 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // ReadGroupBTreeEntries reads entries from a "TREE" format B-tree (type 0 - group symbol table).
@@ -29,8 +28,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	// - offsetSize bytes: Right sibling address.
 
 	headerSize := 4 + 1 + 1 + 2 + int(sb.OffsetSize)*2
-	header := utils.GetBuffer(headerSize)
-	defer utils.ReleaseBuffer(header)
+	header := make([]byte, headerSize)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(header, int64(address)); err != nil {
@@ -74,9 +72,8 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	// Pattern: Key[0], Child[0], Key[1], Child[1], ..., Key[entriesUsed], (last child if internal node)
 	// For leaf nodes with N children: N+1 keys and N children
 	// But we read as pairs: (key, child) repeated
-	dataSize := int(entriesUsed) * 2 * int(sb.OffsetSize)  // entriesUsed children + keys interleaved
-	data := utils.GetBuffer(dataSize + int(sb.OffsetSize)) // +1 key at end
-	defer utils.ReleaseBuffer(data)
+	dataSize := int(entriesUsed) * 2 * int(sb.OffsetSize) // entriesUsed children + keys interleaved
+	data := make([]byte, dataSize+int(sb.OffsetSize))     // +1 key at end
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	dataOffset := int64(address) + int64(headerSize)

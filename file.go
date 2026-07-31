@@ -10,7 +10,6 @@ import (
 	"os"
 
 	"github.com/shyrmapp/hdf5/internal/core"
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // File represents an open HDF5 file with its metadata and root group.
@@ -81,8 +80,7 @@ func Open(filename string) (*File, error) {
 
 // isHDF5File verifies HDF5 file signature.
 func isHDF5File(r io.ReaderAt) bool {
-	buf := utils.GetBuffer(8)
-	defer utils.ReleaseBuffer(buf)
+	buf := make([]byte, 8)
 
 	if _, err := r.ReadAt(buf, 0); err != nil {
 		return false

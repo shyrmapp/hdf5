@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // HDF5 file signature and supported superblock versions.
@@ -40,8 +38,7 @@ type Superblock struct {
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
 // It supports versions 0, 2, and 3 of the superblock format.
 func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
-	buf := utils.GetBuffer(128)
-	defer utils.ReleaseBuffer(buf)
+	buf := make([]byte, 128)
 
 	n, err := r.ReadAt(buf, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
