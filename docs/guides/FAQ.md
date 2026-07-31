@@ -214,12 +214,12 @@ See [Datatypes Guide](DATATYPES.md) for detailed type mapping.
 ### What compression formats work?
 
 **Supported**:
-- ✅ **GZIP/Deflate** (filter ID 1) - Covers 95%+ of files
+- ✅ **GZIP/Deflate** (filter ID 1) - read + write
+- ✅ **LZF** (filter ID 32000) - read + write
+- ✅ **SZIP** (filter ID 4) - read only
+- ✅ **BZIP2** (filter ID 307) - read only
 
 **Not Yet Supported**:
-- ❌ SZIP (filter ID 2)
-- ❌ LZF (filter ID 32000)
-- ❌ BZIP2 (filter ID 307)
 - ❌ Blosc, LZ4, Zstd (custom filters)
 
 **Workaround**: Convert files to GZIP:
@@ -595,7 +595,6 @@ See [ROADMAP.md](../../ROADMAP.md) for complete roadmap.
 - Thread-safety with mutexes
 - SWMR (Single Writer Multiple Reader)
 - Streaming API for large datasets
-- Advanced filters (LZF, SZIP)
 - Parallel I/O
 - ✅ HDF5 2.0.0 supported (format specification v4.0, superblock v0-v3)
 

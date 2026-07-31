@@ -273,11 +273,12 @@ func TestApplyFilter(t *testing.T) {
 // TestFilterPipelineApplyFilters tests full filter pipeline.
 func TestFilterPipelineApplyFilters(t *testing.T) {
 	tests := []struct {
-		name     string
-		pipeline *FilterPipelineMessage
-		data     []byte
-		want     []byte
-		wantErr  bool
+		name       string
+		pipeline   *FilterPipelineMessage
+		filterMask uint32
+		data       []byte
+		want       []byte
+		wantErr    bool
 	}{
 		{
 			name:     "nil pipeline",
@@ -331,11 +332,36 @@ func TestFilterPipelineApplyFilters(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "filter mask skips filter (chunk stored unfiltered)",
+			pipeline: &FilterPipelineMessage{
+				Filters: []Filter{
+					{ID: FilterDeflate},
+				},
+			},
+			filterMask: 0x1, // bit 0: deflate was skipped at write time
+			data:       []byte{0x01, 0x02, 0x03},
+			want:       []byte{0x01, 0x02, 0x03},
+			wantErr:    false,
+		},
+		{
+			name: "filter mask skips one of two filters",
+			pipeline: &FilterPipelineMessage{
+				Filters: []Filter{
+					{ID: FilterShuffle, ClientData: []uint32{2}},
+					{ID: FilterDeflate},
+				},
+			},
+			filterMask: 0x2, // bit 1: deflate skipped, shuffle still applied
+			data:       []byte{0x01, 0x02, 0xAA, 0xBB},
+			want:       []byte{0x01, 0xAA, 0x02, 0xBB},
+			wantErr:    false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.pipeline.ApplyFilters(tt.data)
+			got, err := tt.pipeline.ApplyFilters(tt.data, tt.filterMask)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -347,43 +373,68 @@ func TestFilterPipelineApplyFilters(t *testing.T) {
 }
 
 // TestApplySZIP tests SZIP decompression error handling.
+// The happy path is covered by TestReadSZIPDataset against an official file.
 func TestApplySZIP(t *testing.T) {
+	validCD := []uint32{32 | 16, 8, 32, 20} // NN|MSB, ppb=8, bpp=32, pps=20
+
 	tests := []struct {
 		name           string
+		clientData     []uint32
 		data           []byte
-		wantErrContain []string
+		wantErrContain string
 	}{
 		{
-			name: "SZIP compressed data",
-			data: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
-			wantErrContain: []string{
-				"libaec",
-				"SZIP",
-				"Golomb-Rice",
-				"CCSDS",
-				"GZIP",
-			},
+			name:           "too few client data values",
+			clientData:     []uint32{32, 8},
+			data:           []byte{0x01, 0x02, 0x03, 0x04, 0x05},
+			wantErrContain: "client data",
 		},
 		{
-			name: "empty SZIP data",
-			data: []byte{},
-			wantErrContain: []string{
-				"libaec",
-			},
+			name:           "chunk shorter than size header",
+			clientData:     validCD,
+			data:           []byte{0x01, 0x02},
+			wantErrContain: "size header",
+		},
+		{
+			name:           "odd pixels per block",
+			clientData:     []uint32{32, 7, 32, 20},
+			data:           []byte{0x10, 0x00, 0x00, 0x00, 0xff},
+			wantErrContain: "invalid parameters",
+		},
+		{
+			name:           "unsupported bits per pixel",
+			clientData:     []uint32{32, 8, 48, 20},
+			data:           []byte{0x10, 0x00, 0x00, 0x00, 0xff},
+			wantErrContain: "invalid parameters",
+		},
+		{
+			name:           "truncated aec stream",
+			clientData:     validCD,
+			data:           []byte{0x40, 0x00, 0x00, 0x00, 0xff},
+			wantErrContain: "aec decode",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := applySZIP(tt.data)
+			_, err := applySZIP(tt.clientData, tt.data)
 			require.Error(t, err)
-
-			errMsg := err.Error()
-			for _, substr := range tt.wantErrContain {
-				require.Contains(t, errMsg, substr,
-					"error message should contain %q", substr)
-			}
+			require.Contains(t, err.Error(), tt.wantErrContain)
 		})
+	}
+}
+
+// TestApplySZIPTruncatedDestLen guards against panics when the stored
+// uncompressed size is not a multiple of the sample width (crafted files);
+// output must be clamped to whole decoded samples, never over-sliced.
+func TestApplySZIPTruncatedDestLen(t *testing.T) {
+	// ppb=2, bpp=17 (pixelSize 4), pps=2 -> non-padded path.
+	cd := []uint32{0, 2, 17, 2}
+	for _, destLen := range []byte{9, 1} {
+		out, err := applySZIP(cd, []byte{destLen, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		if err == nil {
+			require.LessOrEqual(t, len(out), int(destLen))
+		}
 	}
 }
 

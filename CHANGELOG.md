@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.16.0] - 2026-07-31
+
+### New Features
+
+- **SZIP read support** via the pure-Go [shyrmapp/aec](https://github.com/shyrmapp/aec)
+  decoder (CCSDS 121.0-B). Ports `SZ_BufftoBuffDecompress` from libaec's
+  sz_compat: NN preprocessing, MSB/LSB, byte-interleaved 32/64-bit pixels,
+  scanline padding. Verified against h5dump on the official
+  `h5repack_szip.h5` test file. SZIP write remains unsupported (decoder-only
+  dependency).
+
+### Fixed
+
+- **Per-chunk filter masks** are now honored (H5Z semantics): a mask bit set
+  for a pipeline filter skips it on decode, so chunks whose optional filter
+  was skipped at write time (e.g. incompressible data) read correctly instead
+  of erroring. Replaces both the "filter masks not supported" rejection and
+  the try-and-fallback heuristic for optional filters, which could silently
+  return corrupt data.
+
+### Changed
+
+- Requires Go 1.26 (first external runtime dependency: `shyrmapp/aec`).
+- Docs: corrected stale filter-support claims (LZF/BZIP2 were already
+  supported but listed as unsupported in QUICKSTART/TROUBLESHOOTING/FAQ).
+
 ## [v0.15.0] - 2026-07-31
 
 First release under `github.com/shyrmapp/hdf5` (hard fork of the dormant scigolib/hdf5).

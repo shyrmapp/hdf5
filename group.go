@@ -257,6 +257,17 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 		address: address, // Store address for later Attributes() access
 	}
 
+	// Hard-link cycles are legal HDF5 (a group may link to an ancestor or
+	// itself). If this group is already being loaded further up the call
+	// stack, return it childless instead of recursing forever. Tracking the
+	// current load path (not all visited groups) keeps diamond-shaped links
+	// (same group reachable twice without a cycle) fully populated.
+	if file.loadingGroups[address] {
+		return group, nil
+	}
+	file.loadingGroups[address] = true
+	defer delete(file.loadingGroups, address)
+
 	// Load children only for groups.
 	// Note: For v0 files, the root group may have ObjectTypeUnknown because
 	// it has no messages (symbol table info is cached in superblock).
