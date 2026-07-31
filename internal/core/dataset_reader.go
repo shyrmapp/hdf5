@@ -11,23 +11,23 @@ import (
 
 // ReadDatasetFloat64 reads a dataset and returns values as float64 array.
 // This is the main entry point for reading numerical datasets.
-func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]float64, error) {
-	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb)
+func ReadDatasetFloat64(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxBytes uint64) ([]float64, error) {
+	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb, maxBytes)
 	if err != nil {
 		return nil, err
 	}
 	if totalElements == 0 {
 		return []float64{}, nil
 	}
-	return convertToFloat64(rawData, datatype, totalElements)
+	return convertToFloat64(rawData, datatype, totalElements, maxBytes)
 }
 
 // ReadDatasetComplex reads a complex-number dataset (datatype class 11,
 // introduced in HDF5 2.0) and returns values as complex128. Both
 // complex128 (16-byte, float64 parts) and complex64 (8-byte, float32
 // parts) storage are supported; parts are stored (real, imaginary).
-func ReadDatasetComplex(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]complex128, error) {
-	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb)
+func ReadDatasetComplex(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxBytes uint64) ([]complex128, error) {
+	rawData, datatype, totalElements, err := readDatasetRaw(r, header, sb, maxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func ReadDatasetComplex(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]
 // readDatasetRaw extracts the datatype and raw element bytes of a dataset:
 // message extraction, layout dispatch (compact/contiguous/chunked), and
 // filter pipeline handling shared by the typed readers.
-func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]byte, *DatatypeMessage, uint64, error) {
+func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxBytes uint64) ([]byte, *DatatypeMessage, uint64, error) {
 	// 1. Extract required messages from object header.
 	var datatypeMsg, dataspaceMsg, layoutMsg, filterPipelineMsg *HeaderMessage
 
@@ -144,19 +144,14 @@ func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]byte
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		// Data is stored contiguously at specific address.
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("failed to read contiguous data: %w", err)
+			return nil, nil, 0, err
 		}
 
 	case layout.IsChunked():
 		// Data is stored in chunks indexed by B-tree.
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("failed to read chunked data: %w", err)
 		}
@@ -173,12 +168,15 @@ func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]byte
 // datatype coverage as the whole-dataset Read() path (notably fixed-point
 // integers of every width/sign — int16, uint8, …), instead of maintaining
 // a second, narrower converter that silently rejected those types.
-func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
-	return convertToFloat64(rawData, datatype, numElements)
+func ConvertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements, maxBytes uint64) ([]float64, error) {
+	return convertToFloat64(rawData, datatype, numElements, maxBytes)
 }
 
 // convertToFloat64 converts raw bytes to float64 array based on datatype.
-func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements uint64) ([]float64, error) {
+func convertToFloat64(rawData []byte, datatype *DatatypeMessage, numElements, maxBytes uint64) ([]float64, error) {
+	if err := checkReadSize(numElements, 8, maxBytes, "dataset"); err != nil {
+		return nil, err
+	}
 	result := make([]float64, numElements)
 	byteOrder := datatype.GetByteOrder()
 
@@ -356,7 +354,7 @@ func (di *DatasetInfo) String() string {
 }
 
 // readChunkedData reads data from chunked layout.
-func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, datatype *DatatypeMessage, sb *Superblock, filterPipeline *FilterPipelineMessage) ([]byte, error) {
+func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, datatype *DatatypeMessage, sb *Superblock, filterPipeline *FilterPipelineMessage, maxBytes uint64) ([]byte, error) {
 	// Calculate total data size.
 	totalElements := dataspace.TotalElements()
 	elementSize := uint64(datatype.Size)
@@ -367,9 +365,10 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 		return nil, fmt.Errorf("dataset size overflow: %w", err)
 	}
 
-	// Validate total size is within reasonable limits.
-	if err := utils.ValidateBufferSize(totalBytes, utils.MaxChunkSize*1024, "dataset"); err != nil {
-		return nil, fmt.Errorf("dataset too large: %w", err)
+	// Bound the raw buffer. The previous limit here was MaxChunkSize*1024
+	// (1 TiB), permissive enough to let a 6 KiB file allocate gigabytes.
+	if err := checkReadSize(totalElements, elementSize, maxBytes, "dataset"); err != nil {
+		return nil, err
 	}
 
 	// Allocate output buffer.
@@ -602,4 +601,81 @@ func float16ToFloat64(bits uint16) float64 {
 		f64bits = sign<<63 | (exp+1023-15)<<52 | frac<<42
 	}
 	return math.Float64frombits(f64bits)
+}
+
+// readContiguousData reads a contiguous dataset's raw bytes, refusing to
+// allocate for a size the file cannot actually hold.
+//
+// The declared element count and element size are both attacker-controlled, so
+// their product is checked for overflow and then validated against the file
+// itself: a contiguous dataset's bytes must physically exist on disk, so if the
+// last declared byte is past EOF the header is lying. Probing one byte before
+// allocating turns a 6 KiB file claiming a 4 GiB dataset (the official corpus'
+// tbigdims.h5) into an error instead of an out-of-memory kill.
+//
+// No arbitrary ceiling is imposed: a genuinely large dataset in a genuinely
+// large file still reads.
+func readContiguousData(r io.ReaderAt, addr, totalElements, elementSize, maxBytes uint64) ([]byte, error) {
+	if err := checkReadSize(totalElements, elementSize, maxBytes, "dataset"); err != nil {
+		return nil, err
+	}
+	totalBytes, err := utils.SafeMultiply(totalElements, elementSize)
+	if err != nil {
+		return nil, fmt.Errorf("dataset size overflow: %w", err)
+	}
+	if totalBytes == 0 {
+		return nil, nil
+	}
+
+	// Probe the final byte. os.File.ReadAt reports io.EOF past end of file.
+	var probe [1]byte
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+	if _, err := r.ReadAt(probe[:], int64(addr+totalBytes-1)); err != nil {
+		return nil, fmt.Errorf(
+			"dataset declares %d bytes at 0x%X, which extends past end of file: %w",
+			totalBytes, addr, err)
+	}
+
+	rawData := make([]byte, totalBytes)
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+	if _, err := r.ReadAt(rawData, int64(addr)); err != nil {
+		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
+	}
+	return rawData, nil
+}
+
+// DefaultMaxReadBytes bounds a single whole-dataset read to 1 GiB.
+//
+// A dataset's declared element count is attacker-controlled, and the typed
+// output is often wider than the stored data — reading an int8 dataset through
+// Read() produces float64, an 8x amplification. The official corpus'
+// tbigdims.h5 is a 6 KiB file declaring 4294967306 int8 elements, which
+// expands to 34 GiB of float64.
+//
+// This has to be a pre-check rather than letting the allocation fail: unlike
+// C (where the caller supplies the buffer), Java or Python (where a failed
+// allocation raises a catchable exception), Go reports exhaustion as
+// "fatal error: runtime: out of memory", which no caller can recover from.
+const DefaultMaxReadBytes = 1 << 30
+
+// checkReadSize rejects an allocation of numElements*bytesPerElement that
+// exceeds maxBytes. A maxBytes of 0 selects DefaultMaxReadBytes.
+//
+// what names the thing being allocated, for the error message.
+func checkReadSize(numElements, bytesPerElement, maxBytes uint64, what string) error {
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxReadBytes
+	}
+
+	total, err := utils.SafeMultiply(numElements, bytesPerElement)
+	if err != nil {
+		return fmt.Errorf("%s size overflow: %w", what, err)
+	}
+	if total > maxBytes {
+		return fmt.Errorf(
+			"%s needs %d bytes, over the %d byte limit; read it in pieces with "+
+				"ReadSlice or ChunkIterator, or raise the limit with WithMaxReadBytes",
+			what, total, maxBytes)
+	}
+	return nil
 }

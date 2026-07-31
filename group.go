@@ -106,7 +106,7 @@ func (d *Dataset) Read() ([]float64, error) {
 	}
 
 	// Use the dataset reader to get values.
-	return core.ReadDatasetFloat64(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetFloat64(d.file.osFile, header, d.file.sb, d.file.maxReadBytes)
 }
 
 // ReadComplex reads a complex-number dataset (HDF5 2.0 datatype class 11)
@@ -117,7 +117,7 @@ func (d *Dataset) ReadComplex() ([]complex128, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.ReadDatasetComplex(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetComplex(d.file.osFile, header, d.file.sb, d.file.maxReadBytes)
 }
 
 // ReadStrings reads string dataset values and returns them as string array.
@@ -131,7 +131,7 @@ func (d *Dataset) ReadStrings() ([]string, error) {
 	}
 
 	// Use the string dataset reader.
-	return core.ReadDatasetStrings(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetStrings(d.file.osFile, header, d.file.sb, d.file.maxReadBytes)
 }
 
 // ReadCompound reads compound dataset values and returns them as array of maps.
@@ -145,7 +145,7 @@ func (d *Dataset) ReadCompound() ([]core.CompoundValue, error) {
 	}
 
 	// Use the compound dataset reader.
-	return core.ReadDatasetCompound(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetCompound(d.file.osFile, header, d.file.sb, d.file.maxReadBytes)
 }
 
 // ReadVLenBytes reads a variable-length dataset and returns values as [][]byte.
@@ -163,7 +163,7 @@ func (d *Dataset) ReadVLenBytes() ([][]byte, error) {
 	}
 
 	// Use the variable-length dataset reader.
-	return core.ReadDatasetVLenBytes(d.file.osFile, header, d.file.sb)
+	return core.ReadDatasetVLenBytes(d.file.osFile, header, d.file.sb, d.file.maxReadBytes)
 }
 
 // Info returns metadata about the dataset without reading actual values.

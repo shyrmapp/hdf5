@@ -61,7 +61,7 @@ func TestReadDatasetFloat64_RealFiles(t *testing.T) {
 			require.NotNil(t, objHeader)
 
 			// Read dataset
-			data, err := ReadDatasetFloat64(f, objHeader, sb)
+			data, err := ReadDatasetFloat64(f, objHeader, sb, 0)
 			require.NoError(t, err)
 			require.NotEmpty(t, data)
 
@@ -157,7 +157,7 @@ func TestReadDatasetFloat64_ErrorCases(t *testing.T) {
 			emptyFile := &emptyReaderAt{}
 
 			// Call function - should return error
-			data, err := ReadDatasetFloat64(emptyFile, tt.header, tt.sb)
+			data, err := ReadDatasetFloat64(emptyFile, tt.header, tt.sb, 0)
 
 			// Verify error occurred
 			require.Error(t, err)
@@ -190,7 +190,7 @@ func TestReadDatasetFloat64_EmptyDataset(t *testing.T) {
 	emptyFile := &emptyReaderAt{}
 
 	// Read empty dataset
-	data, err := ReadDatasetFloat64(emptyFile, header, sb)
+	data, err := ReadDatasetFloat64(emptyFile, header, sb, 0)
 	require.NoError(t, err)
 	require.Empty(t, data)
 }

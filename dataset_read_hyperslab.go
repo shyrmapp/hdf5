@@ -413,7 +413,7 @@ func (d *Dataset) readHyperslabCompact(
 ) (interface{}, error) {
 	// Compact data is stored in layout.CompactData
 	// We need to extract the selected region from this data
-	return extractHyperslabFromRawData(selection, datatype, dataspace, layout.CompactData)
+	return extractHyperslabFromRawData(selection, datatype, dataspace, layout.CompactData, d.file.maxReadBytes)
 }
 
 // readHyperslabContiguous reads hyperslab from contiguous layout dataset.
@@ -489,7 +489,7 @@ func (d *Dataset) readContiguousOptimized(
 			return nil, fmt.Errorf("failed to read 1D contiguous data: %w", err)
 		}
 
-		return core.ConvertToFloat64(rawData, datatype, outputElements)
+		return core.ConvertToFloat64(rawData, datatype, outputElements, d.file.maxReadBytes)
 	}
 
 	// Multi-dimensional contiguous case
@@ -509,7 +509,7 @@ func (d *Dataset) readContiguousOptimized(
 		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 	}
 
-	return core.ConvertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
 }
 
 // readContiguousRowByRow reads selections row-by-row for non-contiguous patterns.
@@ -576,7 +576,7 @@ func (d *Dataset) readContiguousRowByRow(
 		elementSize, &outputIdx,
 	)
 
-	return core.ConvertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
 }
 
 // readContiguous2DOptimized handles 2D contiguous datasets with row-by-row reading.
@@ -633,7 +633,7 @@ func (d *Dataset) readContiguous2DOptimized(
 		}
 	}
 
-	return core.ConvertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
 }
 
 // readHyperslabChunked reads hyperslab from chunked layout dataset.
@@ -705,7 +705,7 @@ func (d *Dataset) readHyperslabChunked(
 	}
 
 	// Convert bytes to float64
-	return core.ConvertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
 }
 
 // chunkIndexEntry stores chunk location information.
@@ -991,6 +991,7 @@ func extractHyperslabFromRawData(
 	datatype *core.DatatypeMessage,
 	dataspace *core.DataspaceMessage,
 	rawData []byte,
+	maxBytes uint64,
 ) (interface{}, error) {
 	elementSize := uint64(datatype.Size)
 	ndims := len(dataspace.Dimensions)
@@ -1019,7 +1020,7 @@ func extractHyperslabFromRawData(
 
 	// Convert bytes to float64 (matching existing Read() behavior)
 	// Future: support other types based on datatype
-	return core.ConvertToFloat64(outputData, datatype, outputElements)
+	return core.ConvertToFloat64(outputData, datatype, outputElements, maxBytes)
 }
 
 // extractHyperslabRecursive recursively iterates through hyperslab selection dimensions.

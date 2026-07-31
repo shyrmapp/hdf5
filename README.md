@@ -77,6 +77,27 @@ func main() {
 access to the same `File` requires caller synchronization; separate `File`
 instances are independent. See [ROADMAP.md](ROADMAP.md).
 
+## Reading files you did not produce
+
+Set a read limit sized to your data:
+
+```go
+f, err := hdf5.Open(name, hdf5.WithMaxReadBytes(256<<20))
+```
+
+How big a dataset is comes from the file itself, and a 6 KiB file can
+legitimately claim to hold tens of gigabytes. Go treats memory exhaustion as a
+fatal runtime error rather than a recoverable panic, so the claim is checked
+before anything is allocated — `WithMaxReadBytes` is what that check compares
+against. The default is 1 GiB.
+
+Size the limit from the largest dataset you expect, not from the machine's RAM:
+a limit derived from available memory makes the same file succeed on one host
+and fail on another. For data legitimately larger than the limit, `ReadSlice`
+and `ChunkIterator` read in pieces and are bounded per piece.
+
+See [SECURITY.md](SECURITY.md) for the full threat model and known gaps.
+
 ## Validation
 
 - Tested against the official HDF5 test corpus (433 files;
@@ -84,6 +105,7 @@ instances are independent. See [ROADMAP.md](ROADMAP.md).
   multi-file and intentionally corrupt inputs)
 - C-library interop testbench in CI: written files verified with
   h5dump/h5diff/h5repack
+- Fuzzed on every CI build (`FuzzRead`) over the whole read surface
 - Defenses against malformed files: overflow-checked allocation, size
   limits, security regression tests
 

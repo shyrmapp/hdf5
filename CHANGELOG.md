@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Unbounded allocation on whole-dataset reads (DoS).** A dataset's declared
+  element count comes from the file and was never checked before allocating.
+  The official corpus' `tbigdims.h5` — 6 KiB on disk — declares 4294967306
+  int8 elements; `Read()` widens those to float64, so it allocated ~34 GiB and
+  killed the process with `fatal error: runtime: out of memory`. This is why
+  CI had been red on `main`.
+
+  Whole-dataset reads are now size-checked before allocating, against the
+  memory the call needs rather than the bytes stored. The default ceiling is
+  1 GiB, configurable per file:
+
+  ```go
+  f, err := hdf5.Open(name, hdf5.WithMaxReadBytes(8<<30))
+  ```
+
+  `ReadSlice` and `ChunkIterator` remain the way to read data larger than the
+  limit without raising it, the same answer jHDF reached for the same problem.
+
+  The check has to happen before the allocation: the HDF5 C library makes the
+  caller supply the buffer, and Java and Python surface a failed allocation as
+  a catchable exception, but Go's out-of-memory is a fatal runtime error no
+  caller can recover from.
+
+  Also fixed as part of this: the four contiguous read paths multiplied element
+  count by element size with no overflow check and no limit at all, and the
+  chunked path's guard was `MaxChunkSize*1024` — 1 TiB — permissive enough to
+  be no guard. Contiguous reads are now additionally validated against actual
+  file length, since those bytes must physically exist on disk.
+
 ### Removed
 
 - **Dead decompression path in `internal/writer`.** `Filter.Remove` (GZIP,

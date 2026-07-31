@@ -169,7 +169,7 @@ func TestConvertToFloat64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := convertToFloat64(tt.rawData, tt.datatype, tt.numElements)
+			got, err := convertToFloat64(tt.rawData, tt.datatype, tt.numElements, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -193,12 +193,12 @@ func TestConvertToFloat64Exported(t *testing.T) {
 		ClassBitField: 0x08, // bit 3 set = signed; bit 0 clear = little-endian
 	}
 
-	got, err := ConvertToFloat64(rawData, dt, 2)
+	got, err := ConvertToFloat64(rawData, dt, 2, 0)
 	require.NoError(t, err)
 	require.Equal(t, []float64{-5, 300}, got)
 
 	// Matches the unexported implementation exactly.
-	want, err := convertToFloat64(rawData, dt, 2)
+	want, err := convertToFloat64(rawData, dt, 2, 0)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
@@ -577,7 +577,7 @@ func BenchmarkConvertToFloat64_Float64(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = convertToFloat64(rawData, datatype, numElements)
+		_, _ = convertToFloat64(rawData, datatype, numElements, 0)
 	}
 }
 

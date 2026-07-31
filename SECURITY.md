@@ -49,7 +49,7 @@ Size limits (`internal/utils`):
 | `MaxAttributeSize`     | 64 MiB |
 | `MaxStringSize`        | 16 MiB |
 | `MaxHyperslabElements` | 1e9    |
-| Whole-dataset read     | 1 TiB  |
+| Whole-dataset read     | 1 GiB, configurable via `WithMaxReadBytes` |
 
 Other defenses:
 
@@ -59,6 +59,13 @@ Other defenses:
 - Hyperslab bounds validation, including overflow in stride arithmetic
 - Soft-link cycle detection, capped at 32 hops (`maxSoftLinkHops`)
 - Datatype nesting capped at 32 levels (`maxDatatypeNesting`)
+- Whole-dataset reads size-checked before allocating, against the memory the
+  call would need rather than the bytes on disk (reading int8 through `Read()`
+  yields float64, 8x wider). Go reports allocation failure as an unrecoverable
+  `fatal error: runtime: out of memory`, so this cannot be left to fail late
+  the way it can in C, Java or Python.
+- Contiguous datasets additionally validated against actual file length: a
+  header claiming more bytes than the file holds is rejected before allocating
 - Fletcher32 and metadata checksum validation where the format provides it
 
 ### Testing
@@ -77,9 +84,10 @@ Other defenses:
 These are real and unmitigated. Handle them yourself if they matter to you:
 
 - **No decompression ratio limit.** A compression bomb — a small GZIP or LZF
-  chunk that expands enormously — is bounded only by `MaxChunkSize` (1 GiB per
-  chunk), not by a ratio. A file with many such chunks can exhaust memory.
-  Bound the input size yourself before opening untrusted files.
+  chunk that expands enormously — is bounded by the whole-dataset read limit
+  and by `MaxChunkSize` (1 GiB per chunk), but not by a ratio. Raising
+  `WithMaxReadBytes` raises this exposure too. Bound the input size yourself
+  before opening untrusted files.
 - **No global object-count limit** during traversal. A file declaring an
   enormous number of groups or datasets will allocate accordingly.
 - **Group traversal is not depth-limited.** Only soft-link chains and datatype
@@ -89,8 +97,16 @@ These are real and unmitigated. Handle them yourself if they matter to you:
 
 ### Handling untrusted files
 
-Bound the file before you open it, and check every error — a parse failure may
-be the only signal that a file is hostile.
+Set a read limit sized to your data, bound the file before you open it, and
+check every error — a parse failure may be the only signal that a file is
+hostile.
+
+`WithMaxReadBytes` is the single most important thing to set here. A dataset's
+declared size is a number taken from the file: a 6 KiB file can claim to hold
+tens of gigabytes, and Go cannot recover from the resulting allocation. Size
+the limit from the largest dataset you expect, with headroom — not from the
+machine's RAM, which would make the same file behave differently per host and
+would let a bigger host absorb a bigger hostile claim.
 
 ```go
 info, err := os.Stat(name)
@@ -98,7 +114,8 @@ if err != nil || info.Size() > maxAllowedSize {
     return errors.New("rejected: file too large")
 }
 
-f, err := hdf5.Open(name)
+// Sized to the workload, not to the host.
+f, err := hdf5.Open(name, hdf5.WithMaxReadBytes(256<<20))
 if err != nil {
     return fmt.Errorf("open failed: %w", err) // may indicate a crafted file
 }
