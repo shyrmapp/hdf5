@@ -64,7 +64,7 @@ func main() {
 - Datatypes: fixed-point (every width + sign), float16/32/64, complex
   (HDF5 2.0 class 11), fixed and variable-length strings, compounds,
   arrays, enums, references, opaque
-- Compression: GZIP, LZF, BZIP2; Shuffle and Fletcher32 filters
+- Compression: GZIP, LZF, SZIP (via [shyrmapp/aec](https://github.com/shyrmapp/aec)), BZIP2; Shuffle and Fletcher32 filters
 - Attributes (compact and dense), soft/hard/external link resolution
 
 **Writing**
@@ -76,7 +76,7 @@ func main() {
 - Groups, attributes (create/modify/delete), hard/soft/external links
 - Object deletion with space reclamation
 
-**Not supported**: SZIP (requires libaec), SWMR, parallel I/O. Concurrent
+**Not supported**: SZIP write, SWMR, parallel I/O. Concurrent
 access to the same `File` requires caller synchronization; separate `File`
 instances are independent. See [ROADMAP.md](ROADMAP.md).
 
@@ -97,7 +97,7 @@ instances are independent. See [ROADMAP.md](ROADMAP.md).
 
 ## Development
 
-Requires Go 1.25+. The library has no external dependencies.
+Requires Go 1.26+. Pure-Go dependencies only (no CGo).
 
 ```bash
 go test ./...          # run tests

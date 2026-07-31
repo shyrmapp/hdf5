@@ -403,11 +403,7 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 
 		// Apply filters (decompression, etc) if present.
 		if filterPipeline != nil && !chunkStoredUnfiltered(layout, chunk, actualChunkDims, dataDims) {
-			if chunk.FilterMask != 0 {
-				return nil, fmt.Errorf("per-chunk filter masks not supported (chunk at 0x%x, mask 0x%x)",
-					chunk.Address, chunk.FilterMask)
-			}
-			chunkData, err = filterPipeline.ApplyFilters(chunkData)
+			chunkData, err = filterPipeline.ApplyFilters(chunkData, chunk.FilterMask)
 			if err != nil {
 				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
 			}

@@ -678,8 +678,9 @@ func (d *Dataset) readHyperslabChunked(
 	for _, chunk := range allChunks {
 		key := chunkCoordsToKey(chunk.Scaled[:len(dims)])
 		chunkIndex[key] = chunkIndexEntry{
-			address: chunk.Address,
-			nbytes:  chunk.NBytes,
+			address:    chunk.Address,
+			nbytes:     chunk.NBytes,
+			filterMask: chunk.FilterMask,
 		}
 	}
 
@@ -709,8 +710,9 @@ func (d *Dataset) readHyperslabChunked(
 
 // chunkIndexEntry stores chunk location information.
 type chunkIndexEntry struct {
-	address uint64
-	nbytes  uint64
+	address    uint64
+	nbytes     uint64
+	filterMask uint32
 }
 
 // findOverlappingChunks identifies all chunks that overlap with the hyperslab selection.
@@ -827,7 +829,7 @@ func (d *Dataset) extractFromChunk(
 
 	// Decompress if needed (using existing FilterPipelineMessage.ApplyFilters)
 	if filterPipeline != nil {
-		chunkData, err = filterPipeline.ApplyFilters(chunkData)
+		chunkData, err = filterPipeline.ApplyFilters(chunkData, chunkInfo.filterMask)
 		if err != nil {
 			return fmt.Errorf("failed to apply filters: %w", err)
 		}

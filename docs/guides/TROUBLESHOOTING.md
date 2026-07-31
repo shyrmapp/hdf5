@@ -308,9 +308,9 @@ Error: unsupported filter: 6
 
 **Cause**: Unsupported compression format.
 
-**Supported**: GZIP/Deflate (filter ID 1)
+**Supported**: GZIP/Deflate (1), SZIP (4, read), LZF (32000), BZIP2 (307, read)
 
-**Unsupported**: SZIP (2), LZF (32000), BZIP2 (307)
+**Unsupported**: Blosc, LZ4, Zstd (custom filter IDs)
 
 **Solution**:
 

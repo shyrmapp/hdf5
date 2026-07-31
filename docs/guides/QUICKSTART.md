@@ -380,8 +380,9 @@ Not supported: H5T_TIME (deprecated in HDF5 spec)
 
 ### Q: What compression formats work?
 **A**: Currently:
-- ✅ GZIP/Deflate (most common)
-- ❌ SZIP, LZF, BZIP2, Blosc, LZ4, Zstd (optional filters, planned for v0.14.0+)
+- ✅ GZIP/Deflate, LZF (read + write)
+- ✅ SZIP, BZIP2 (read only)
+- ❌ Blosc, LZ4, Zstd (custom filters)
 
 ### Q: Is it thread-safe?
 **A**: Currently, each `File` instance should be used from a single goroutine. Thread-safe concurrent access and SWMR mode are planned for v0.14.0+.
@@ -438,7 +439,7 @@ if err != nil {
 
 **Solution**:
 - Check if compression is GZIP (supported)
-- Other formats (SZIP, LZF) not yet supported - see [ROADMAP.md](../../ROADMAP.md)
+- GZIP, LZF, SZIP, and BZIP2 are supported for reading; other filters (Blosc, LZ4, Zstd) are not - see [ROADMAP.md](../../ROADMAP.md)
 
 ---
 

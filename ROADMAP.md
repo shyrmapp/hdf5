@@ -36,7 +36,8 @@ release; write output is validated with h5dump/h5diff/h5repack in CI.
 
 ## ❌ Not planned
 
-- **SZIP write** — patent/libaec-encumbered; no pure-Go implementation.
+- **SZIP write** — [shyrmapp/aec](https://github.com/shyrmapp/aec) is
+  decoder-only; read support landed in v0.16. Encoder only if demand shows up.
 - **BZIP2 write** — stdlib `compress/bzip2` is decompress-only; adding a
   dependency contradicts the zero-dep design. Read support stays.
 - **User-configurable B-tree rebalancing** — the C library exposes no such

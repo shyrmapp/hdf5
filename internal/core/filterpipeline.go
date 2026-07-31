@@ -160,7 +160,10 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 }
 
 // ApplyFilters applies filter pipeline to decompress/decode chunk data.
-func (fp *FilterPipelineMessage) ApplyFilters(data []byte) ([]byte, error) {
+// filterMask is the chunk's filter exclusion mask: bit i set means pipeline
+// filter i was skipped at write time (H5Z semantics), e.g. an optional
+// compression filter that did not shrink the chunk.
+func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32) ([]byte, error) {
 	if fp == nil || len(fp.Filters) == 0 {
 		return data, nil
 	}
@@ -168,22 +171,20 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte) ([]byte, error) {
 	// Filters are applied in REVERSE order during decompression.
 	// (they were applied forward during compression).
 	result := data
-	var err error
 
 	for i := len(fp.Filters) - 1; i >= 0; i-- {
 		filter := fp.Filters[i]
 
-		// Skip optional filters if they fail.
-		isOptional := (filter.Flags & 0x0001) != 0
+		if filterMask&(1<<uint(i)) != 0 {
+			// Filter was skipped when the chunk was written.
+			continue
+		}
 
-		result, err = applyFilter(filter, result)
+		filtered, err := applyFilter(filter, result)
 		if err != nil {
-			if isOptional {
-				// Optional filter - log and continue.
-				continue
-			}
 			return nil, fmt.Errorf("filter %d (%s) failed: %w", filter.ID, filterName(filter.ID), err)
 		}
+		result = filtered
 
 		// LZF filter: ensure output matches expected size from cd_values[2].
 		// The HDF5 LZF filter stores the expected uncompressed chunk size in cd_values[2].
@@ -233,7 +234,7 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 		return applyLZF(data)
 
 	case FilterSZIP:
-		return applySZIP(data)
+		return applySZIP(filter.ClientData, data)
 
 	default:
 		return nil, fmt.Errorf("unsupported filter ID: %d", filter.ID)
@@ -346,21 +347,6 @@ func applyLZF(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("lzf decompression failed: %w", err)
 	}
 	return decompressed, nil
-}
-
-// applySZIP decompresses SZIP-compressed data.
-// SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard).
-// This algorithm is commonly used for satellite imagery and scientific data.
-//
-// SZIP requires libaec (Adaptive Entropy Coding) library for decompression.
-// Since no pure Go implementation exists, we return an informative error.
-//
-// Reference: https://github.com/MathisRosenhauer/libaec
-func applySZIP(_ []byte) ([]byte, error) {
-	return nil, errors.New("SZIP decompression requires libaec library (not available in pure Go); " +
-		"SZIP uses extended Golomb-Rice coding (CCSDS 121.0-B-3 standard); " +
-		"to read SZIP-compressed datasets, use the HDF5 C library or h5py; " +
-		"alternatively, re-save the file with GZIP compression (filter ID 1)")
 }
 
 // lzfDecompress decompresses LZF-compressed data.
