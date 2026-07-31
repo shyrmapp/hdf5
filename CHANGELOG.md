@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v0.15.0] - 2026-07-31
+
+First release under `github.com/shyrmapp/hdf5` (hard fork of the dormant scigolib/hdf5).
+
+### Changed
+
+- **Module path renamed** to `github.com/shyrmapp/hdf5` — update your imports.
+
+### New Features
+
+- **HDF5 2.0 complex datatype read** (class 11)
+- **Layout message v4/v5 read** and modern chunk indexes
+- **LZF write** support
+- **float16 read** support
+- **Public compound API** and link resolution
+- **Fixed-point read**: every width + sign combination defined by the spec
+- **Dense link storage** enumerated on group load
+- **C-library interop testbench** + 6 write-compatibility fixes
+
+### Removed
+
+- Speculative/dead code, duplicate testdata; docs corrected to match actual behavior
+
 ## [v0.14.0] - 2026-06-25
 
 ### New Feature
@@ -29,6 +52,7 @@ fw.Close()
 ```
 
 **What happens on delete**:
+
 - Object is unlinked from parent group (SNOD entry removed, B-tree updated)
 - Reference count decremented; if nlink reaches 0, cascade delete frees:
   - Object header space
@@ -54,6 +78,7 @@ This is the layout every **NetCDF-4** producer emits for groups with more than ~
 in those files.
 
 Also fixes two bugs in `readHeapObject`:
+
 1. Direct block header size didn't account for the 4-byte checksum when `ChecksumDirBlocks` is set
 2. Managed-area address origin depends on `ChecksumDirBlocks` flag (C library vs scigolib convention)
 
@@ -146,6 +171,7 @@ Reported by [@zhoujun24](https://github.com/zhoujun24).
 Writing attributes to a group after creating child groups corrupted the file. The OHDR grew
 beyond its original allocation and overwrote the adjacent Local Heap. Per C reference
 (`H5Oalloc.c`), implemented three-tier defense:
+
 1. Pre-allocate OHDR with 256-byte padding (covers ~7 compact attributes)
 2. Bounds check before rewrite — if overflow, use continuation chunk
 3. OCHK continuation blocks (type 0x0010) for messages that don't fit
@@ -447,6 +473,7 @@ and float properties use the full 12-byte IEEE 754 layout (`bit_offset`, `bit_pr
 `esize`, `mpos`, `msize`, `ebias`). Our encoding used incorrect byte layouts.
 
 Additionally, `ClassBitField` values were wrong:
+
 - Signed integers: `0x00` → `0x08` (H5T_SGN_2, two's complement)
 - Float32: `0x00` → `0x1F20` (sign bit=31, implied mantissa normalization)
 - Float64: `0x00` → `0x3F20` (sign bit=63, implied mantissa normalization)
@@ -492,6 +519,7 @@ messages — but completely omitted the 4-byte Jenkins lookup3 checksum that mus
 every V2 object header chunk per the HDF5 Format Specification.
 
 **Fix**:
+
 - Added Jenkins lookup3 checksum computation and writing to `writeToV2()`
 - Added support for variable chunk size field width (1/2/4/8 bytes) per HDF5 spec flags bits 0-1
 - Unified all manual header size calculations to use `ObjectHeaderWriter.Size()`
@@ -545,16 +573,17 @@ covering read, write, and internal paths.
 
 **Coverage improvements by package:**
 
-| Package | Before | After | Delta |
-|---------|--------|-------|-------|
-| Root (hdf5) | 75.8% | 82.4% | +6.6% |
-| internal/core | 76.0% | 87.9% | +11.9% |
-| internal/structures | 77.1% | 91.5% | +14.4% |
-| internal/writer | — | 88.2% | — |
-| internal/rebalancing | — | 95.0% | — |
-| internal/utils | — | 96.2% | — |
+| Package              | Before | After | Delta  |
+| -------------------- | ------ | ----- | ------ |
+| Root (hdf5)          | 75.8%  | 82.4% | +6.6%  |
+| internal/core        | 76.0%  | 87.9% | +11.9% |
+| internal/structures  | 77.1%  | 91.5% | +14.4% |
+| internal/writer      | —      | 88.2% | —      |
+| internal/rebalancing | —      | 95.0% | —      |
+| internal/utils       | —      | 96.2% | —      |
 
 **Key areas covered:**
+
 - Public API: ReadStrings, ReadCompound, loadObject, loadChildren, NamedDatatype
 - Hyperslab: compact, float32/int64, 3D/strided, chunked layouts
 - Write paths: all integer types, string datasets, compound datasets, chunked+filters
@@ -583,13 +612,14 @@ Added support for all integer slice types in attribute writing. Previously only 
 
 Scalar attributes already supported all sizes — this closes the gap for slices.
 
-*Inspired by PR #19 from @CWBudde (MeKo-Christian).*
+_Inspired by PR #19 from @CWBudde (MeKo-Christian)._
 
 ### 🔧 Maintenance
 
 #### Lint Cleanup (70 issues across 24 files)
 
 Fixed all golangci-lint issues accumulated after linter version update:
+
 - Removed 39 stale `//nolint:gosec` directives (no longer needed)
 - Added targeted nolint for 19 new gosec G115/G602 warnings on variable-size encoding
 - Replaced 11 `WriteString(Sprintf)` with `fmt.Fprintf` (staticcheck QF1012)
@@ -610,6 +640,7 @@ Fixed all golangci-lint issues accumulated after linter version update:
 **Impact**: All files with V2/V3 superblocks were incompatible with h5dump, h5py, HDF5 C library, and any other HDF5-compliant reader.
 
 **Implementation**:
+
 - Created `internal/core/checksum.go` with `JenkinsChecksum()` function
 - Direct port of `H5_checksum_lookup3()` from HDF5 C library
 - Validated against known HDF5 files (aggr.h5 checksum: 0xD5CB91E3)
@@ -623,12 +654,14 @@ the entire dataset into memory. Essential for processing TB-scale scientific dat
 on memory-constrained systems.
 
 **New Methods**:
+
 - `Dataset.ChunkIterator()` / `ChunkIteratorWithContext(ctx)` - Create iterator
 - `ChunkIterator.Next()` / `Chunk()` / `ChunkCoords()` - Iterate and read
 - `ChunkIterator.Progress()` / `Total()` / `Err()` - Track progress
 - `ChunkIterator.OnProgress(fn)` / `Reset()` / `ChunkDims()` / `DatasetDims()`
 
 **Usage**:
+
 ```go
 iter, _ := ds.ChunkIterator()
 for iter.Next() {
@@ -638,6 +671,7 @@ for iter.Next() {
 ```
 
 **Bug Fixes During Implementation**:
+
 - Fixed B-tree key format to include `nbytes` field (HDF5 spec compliance)
 - Fixed chunked dataset writer to update B-tree address in layout message
 
@@ -659,6 +693,7 @@ Added support for additional compression filters used by h5py and scientific app
 
 Users reported that attributes could not be read from HDF5 files created by h5py.
 The issue manifested in two ways:
+
 1. Integer attributes on root groups were not found
 2. Variable-length string attributes returned "unsupported datatype class 9"
 
@@ -676,17 +711,20 @@ The issue manifested in two ways:
    the Global Heap reference, making the total size `4 + offsetSize + 4` bytes, not `offsetSize + 4`.
 
 **Fixed**:
+
 - `internal/core/attribute.go`: Added 8-byte alignment for V1/V2 attribute parsing
 - `internal/core/datatype.go`: Fixed `IsVariableString()` to check `ClassBitField` correctly
 - `internal/core/attribute.go`: Added `DatatypeVarLen` case to `ReadValue()` with proper vlen format
 - `internal/core/attribute.go`: Added `readVariableLengthString()` helper for Global Heap access
 
 **Result**:
+
 - Integer attributes on root groups now read correctly
 - Variable-length string attributes on datasets now read correctly
 - Files created by h5py work without issues
 
 **Test file**: Python script from Issue #14 creates file with:
+
 - Root group: `File Attribute = 123456` (integer)
 - Dataset: `Dataset Attribute 1 = "Test Attribute 1"` (vlen string)
 - Dataset: `Dataset Attribute 2 = "Test Attribute 2"` (vlen string)
@@ -696,11 +734,13 @@ All attributes now read successfully.
 ### 📊 Test Suite Results
 
 **Official HDF5 Test Suite Results**:
+
 - Pass rate: **100%** (378/378 valid files) - maintained
 - All existing tests pass
 - New unit tests added for variable-length string attributes
 
 **Files Changed**:
+
 - `internal/core/attribute.go` - VLen string support, 8-byte alignment fix
 - `internal/core/attribute_test.go` - New unit tests for vlen strings
 - `internal/core/datatype.go` - Fixed IsVariableString() logic
@@ -718,6 +758,7 @@ Files with v1 object headers were not parsing all messages correctly, causing gr
 to appear empty even when they contained Link Messages.
 
 **Root Cause**: Wrong end offset calculation in `objectheader_v1.go`:
+
 - Code used `headerAddr + headerSize` instead of `headerAddr + 16 + headerSize`
 - The 16-byte header prefix was not accounted for
 - Result: only 8 bytes parsed for messages instead of full message area
@@ -725,6 +766,7 @@ to appear empty even when they contained Link Messages.
 **Fixed**: `internal/core/objectheader_v1.go` - correct end offset calculation
 
 **Result**:
+
 - Files with v1 headers and Link Messages now show children correctly
 - User's `flux.h5` file now works (was showing 0 children, now shows group1)
 
@@ -739,11 +781,13 @@ with "negative offset: -1" error because we tried to load objects at invalid add
 `ObjectAddress = HADDR_UNDEF (0xFFFFFFFFFFFFFFFF)` - not a real address.
 
 **Fixed**: Following C library behavior (lazy soft link resolution):
+
 - `internal/structures/symboltable.go`: Added `CacheTypeSoftLink` constant and `IsSoftLink()` method
 - `internal/structures/btree.go`: Added `IsSoftLink()` method to BTreeEntry
 - `group.go`: Skip soft links during file open, resolve only on explicit access
 
 **Result**:
+
 - 14 additional test files now pass (files with dangling soft links)
 - Official HDF5 test suite pass rate: 87.6% → 91.3%
 
@@ -755,11 +799,13 @@ Added support for HDF5 Named Datatypes (object type 2) - datatypes stored as
 first-class objects that can be shared between datasets.
 
 **Added**:
+
 - `NamedDatatype` struct in `group.go`
 - `Name()` and `Datatype()` methods
 - Proper handling in `loadObject()` for `ObjectTypeDatatype`
 
 **Result**:
+
 - 30 additional test files now pass (files with committed datatypes)
 - Official HDF5 test suite pass rate: 91.3% → 99.7%
 
@@ -769,29 +815,35 @@ Files with V2 object headers and attribute creation order tracking enabled
 (flag bit 2 = `H5O_HDR_ATTR_CRT_ORDER_TRACKED`) were failing with EOF errors.
 
 **Root Causes**:
+
 1. Checksum not accounted for: V2 headers have 4-byte CRC32 at chunk end
 2. Creation index not accounted for: When bit 2 is set, message headers are 6 bytes instead of 4
 
 **Fixed**: `internal/core/objectheader.go`:
+
 - Subtract 4 bytes from chunk end for CRC32 checksum
 - Use 6-byte message header when creation order tracking is enabled
 
 **Result**:
+
 - `torderattr.h5` and all other V2 files with creation order now parse correctly
 - Official HDF5 test suite pass rate: 99.7% → **100%**
 
 ### 📊 Test Suite Results
 
 **Official HDF5 Test Suite Results**:
+
 - Pass rate: **100%** (378/378 valid files)
 - Total files: 433 (55 skipped as known invalid/unsupported)
 
 **Reference Test Suite**:
+
 - Added `expectError` classification for intentionally invalid files
 - `bad_compound.h5` now tests that we correctly return error (h5dump also fails)
 - Professional error handling validation instead of skipping
 
 **Files Changed**:
+
 - `internal/core/objectheader.go` - V2 header checksum and creation index fix
 - `internal/core/objectheader_v1.go` - V1 header parsing fix
 - `internal/structures/symboltable.go` - Soft link support
@@ -813,12 +865,14 @@ HDF5 files with v0 (legacy) superblocks were incorrectly showing 0 children in g
 This affected files created with older HDF5 versions (pre-1.8).
 
 **Root Cause**: Multiple parsing issues in v0 format handling:
+
 - B-tree child addresses were read with wrong endianness
 - Local heap data was read from wrong offset (assumed header+32 instead of actual address from header)
 - Symbol table entries had incorrect size calculations
 - Root group's cached B-tree/Heap addresses weren't being used
 
 **Fixed**:
+
 - `internal/structures/btree_group.go`: Use file's endianness for address parsing
 - `internal/structures/localheap.go`: Read data segment from actual address in header
 - `internal/structures/symboltable.go`: Correct 40-byte entry size with scratch-pad
@@ -826,6 +880,7 @@ This affected files created with older HDF5 versions (pre-1.8).
 - `group.go`: Use superblock cached addresses for root group, cycle detection
 
 **Result**:
+
 - `group_old.h5` now correctly shows 2 objects (was showing 0)
 - Big-endian files parse correctly
 - No infinite recursion on shared symbol tables
@@ -843,6 +898,7 @@ not yet implemented.
 **Correction**: Clarified superblock version support in documentation and code
 
 #### Fixed
+
 - **Documentation Correction**: Removed incorrect references to "Superblock Version 4"
   - **Root Cause**: Confusion between "HDF5 Format Specification v4.0" (document version) and "Superblock Version" (data structure version)
   - **Reality**: HDF5 Format Spec v4.0 defines Superblock versions 0, 1, 2, and 3 only
@@ -859,11 +915,13 @@ not yet implemented.
 - **Corrected Comments**: Updated datalayout.go comments regarding chunk dimension sizes
 
 #### Impact
+
 - **No functional changes**: Existing v3 read/write support works correctly
 - **No breaking changes**: Public API unchanged
 - **Improved accuracy**: Documentation now matches HDF5 specification and reference implementation
 
 **Files**:
+
 - internal/core/superblock.go (~150 lines removed)
 - internal/core/superblock_test.go (~200 lines removed)
 - internal/core/superblock_write_test.go (~150 lines removed)
@@ -884,6 +942,7 @@ not yet implemented.
 ### 🔒 Security
 
 #### CVE Fixes (TASK-023)
+
 - **CVE-2025-7067** (HIGH 7.8): Buffer overflow in chunk reading
   - Added `SafeMultiply()` for overflow-safe multiplication
   - Created `CalculateChunkSize()` with overflow checking
@@ -901,6 +960,7 @@ not yet implemented.
   - MaxHyperslabElements limit (1 billion)
 
 **Files**:
+
 - `internal/utils/overflow.go` (NEW - 121 lines)
 - `internal/utils/overflow_test.go` (NEW - 251 lines)
 - `internal/utils/security_test.go` (NEW - 501 lines)
@@ -911,6 +971,7 @@ not yet implemented.
 ### ✨ Added
 
 #### HDF5 2.0.0 Superblock Support (TASK-024)
+
 - **Superblock Version 3** read and write support (48-byte structure)
 - **HDF5 2.0.0 Compatibility** - v3 superblocks (not v4, which doesn't exist)
 - **Read Support**: Parse v3 superblocks with CRC32 checksum validation
@@ -919,10 +980,12 @@ not yet implemented.
 - **Backward Compatibility** - Full support for v0, v2, v3 formats
 
 **Note**: Initial release incorrectly documented "v4 support". Corrected in v0.13.1.
+
 - HDF5 Format Specification v4.0 (document version) defines superblock versions 0-3 only
 - HDF5 2.0.0 uses Superblock Version 3, not 4
 
 **Implementation**:
+
 - Enhanced Superblock v2/v3 write support (unified in `writeV2()`)
 - Version byte differentiation (v2=2, v3=3) at byte 8
 - CRC32 checksum validation for v2/v3
@@ -931,6 +994,7 @@ not yet implemented.
 **Files**: `superblock.go`, `superblock_test.go`, `superblock_write_test.go`
 
 #### 64-bit Chunk Dimensions Support (TASK-025)
+
 - **BREAKING CHANGE**: `DataLayoutMessage.ChunkSize` changed from `[]uint32` to `[]uint64`
   - Only affects code directly accessing `internal/core` package structures
   - Public API remains unchanged
@@ -939,6 +1003,7 @@ not yet implemented.
 - **Backward Compatibility** - Full support for existing files
 
 **Implementation**:
+
 - Added `ChunkKeySize` field (4 bytes for v0-v2, 8 bytes for future v3+)
 - Version-based detection in `ParseDataLayoutMessage()`
 - Updated all chunk processing functions to uint64
@@ -948,6 +1013,7 @@ not yet implemented.
 **Files**: 12 files modified (datalayout.go, dataset_reader.go, btree_v1.go, 8 test files)
 
 #### AI/ML Datatypes (TASK-026)
+
 - **FP8 E4M3** (8-bit float, 4-bit exponent, 3-bit mantissa)
   - Range: ±448
   - Precision: ~1 decimal digit
@@ -962,12 +1028,14 @@ not yet implemented.
   - Use case: Google TPU, NVIDIA Tensor Cores, Intel AMX
 
 **Implementation**:
+
 - Full IEEE 754 compliance
 - Special values: zero, ±infinity, NaN, subnormal numbers
 - Round-to-nearest conversion (banker's rounding for bfloat16)
 - Fast bfloat16 conversion (bit-shift only)
 
 **Files**:
+
 - `datatype_fp8.go` (327 lines)
 - `datatype_bfloat16.go` (72 lines)
 - `datatype_fp8_test.go` (238 lines)
@@ -978,6 +1046,7 @@ not yet implemented.
 ### 🔧 Improved
 
 #### Code Quality
+
 - Added justified nolint for binary format parsing complexity
 - Zero linter issues across 34+ linters
 - Security-first approach with overflow protection throughout
@@ -1002,6 +1071,7 @@ not yet implemented.
 ### ✨ Added
 
 #### TASK-021: Compound Datatype Writing (COMPLETE)
+
 - **Compound Datatype Support** - Full structured data writing (C structs / Go structs)
 - **Nested Compounds** - Support for nested compound types with all field types
 - **Scientific Records** - Database-like storage for complex scientific data
@@ -1011,6 +1081,7 @@ not yet implemented.
 - **Performance**: Efficient encoding with zero allocations in hot paths
 
 #### TASK-022: Soft/External Links Full Implementation (COMPLETE)
+
 - **Soft Links** - Full symbolic path references within files
 - **External Links** - Complete cross-file references with path resolution
 - **Security Validation** - Path traversal prevention and validation
@@ -1023,6 +1094,7 @@ not yet implemented.
   - Circular reference detection
 
 #### TASK-020: Official HDF5 Test Suite Validation (COMPLETE)
+
 - **433 Official Test Files** - Comprehensive validation with HDF5 1.14.6 test suite
 - **98.2% Pass Rate** - 380/387 valid single-file HDF5 files pass (EXCELLENT!)
 - **Production Quality Confirmed** - Validated against C library behavior
@@ -1042,6 +1114,7 @@ not yet implemented.
 ### 🔧 Improved
 
 #### Documentation
+
 - **Complete Documentation Overhaul** - All docs updated for v0.12.0 stable release
 - **Architecture Guide** - Removed version-specific mentions, updated version history
 - **User Guides** - Updated all 10 guides with current dates and versions
@@ -1057,6 +1130,7 @@ not yet implemented.
   - Professional flat-square style
 
 #### CI/CD
+
 - **Codecov Action v5** - Updated from v4 with proper token authentication
 - **Breaking Changes Fixed**:
   - `file:` → `files:` parameter (deprecated fix)
@@ -1089,6 +1163,7 @@ not yet implemented.
 No breaking changes! All v0.11.x-beta code continues to work unchanged.
 
 **New features available**:
+
 - Compound datatype writing - use `WriteCompound()`
 - Soft/external links - use `CreateSoftLink()`, `CreateExternalLink()`
 - Enhanced validation with official test suite
@@ -1096,12 +1171,14 @@ No breaking changes! All v0.11.x-beta code continues to work unchanged.
 ### 🔮 Next Steps
 
 See [ROADMAP.md](ROADMAP.md) for future plans:
+
 - **v0.12.x** - Maintenance and community feedback (2025-11 → 2026-Q2)
 - **v1.0.0 LTS** - Long-term support release (Q3 2026)
 
 ### 🙏 Acknowledgments
 
 Special thanks to:
+
 - HDF Group for the official test suite
 - Community feedback that shaped this release
 - All contributors and testers
@@ -1111,6 +1188,7 @@ Special thanks to:
 ## [v0.11.6-beta] - 2025-11-06
 
 ### Added
+
 - **Dataset Resize and Extension** (TASK-018):
   - `Unlimited` constant for unlimited dimensions
   - `WithMaxDims()` option for extensible datasets
@@ -1139,16 +1217,19 @@ Special thanks to:
   - Full test suite (4 tests, 22 subtests) with round-trip validation
 
 ### Changed
+
 - Improved test coverage to 70.4% (was 64.9%)
 - Fixed `ReadSlice()` nil pointer bug with proper hyperslab defaults initialization
 - Enhanced code formatting compliance
 
 ### Performance
+
 - Hyperslab selection reads ONLY needed data, not entire dataset
 - Chunked layout optimization: finds and reads ONLY overlapping chunks
 - Expected speedup: 10-250x for typical use cases (small slices from large datasets)
 
 ### Quality
+
 - 63 new tests added (all passing)
 - 0 golangci-lint issues
 - 0 TODO/FIXME comments
@@ -1166,6 +1247,7 @@ Special thanks to:
 ### ✨ Added
 
 #### TASK-013: Nested Datasets Support (2 hours)
+
 - **Nested Group Support** - Datasets in arbitrarily nested groups (e.g., `/experiments/trial1/data`)
 - **MATLAB v7.3 Compatibility** - Complex numbers (`/z/real`, `/z/imag`) validated by user
 - **GroupMetadata Tracking** - Automatic tracking of heap/stnode/btree addresses
@@ -1173,6 +1255,7 @@ Special thanks to:
 - **User Validation**: ✅ MATLAB project released using develop branch!
 
 #### TASK-014: Group Attributes Support (2 hours)
+
 - **Attributes on Groups** - Full support for group-level metadata
 - **MATLAB v7.3 Metadata** - `MATLAB_class`, `MATLAB_complex` attributes working
 - **Compact and Dense Storage** - Both formats supported (< 64KB and > 64KB)
@@ -1180,6 +1263,7 @@ Special thanks to:
 - **User Validation**: ✅ MATLAB metadata working perfectly!
 
 #### TASK-016: Indirect Blocks for Fractal Heap (4 hours)
+
 - **Automatic Scaling** - Beyond 512KB single direct block limit
 - **Doubling Table Structure** - Support for large objects (200+ attributes tested)
 - **Read-Modify-Write Support** - Seamless transition from direct to indirect
@@ -1188,6 +1272,7 @@ Special thanks to:
 - **Coverage**: 76.1% structures package
 
 #### TASK-015: Link Support System (4 hours)
+
 - **Phase 0: Link Message Infrastructure** - Encoding/decoding for all link types
   - Files: `link_message.go` (497 lines), `link_message_test.go` (487 lines)
   - Support: Hard (type 0), Soft (type 1), External (type 64)
@@ -1257,6 +1342,7 @@ Special thanks to:
 ### ✨ Added
 
 #### Smart Rebalancing API (Phase 3 Complete)
+
 - **Auto-Tuning Rebalancing System** - Automatic strategy selection based on workload detection
 - **Real-time Metrics Collection** - Operation patterns, timing, performance data
 - **Dynamic Mode Switching** - Automatic switching between lazy/incremental/default modes
@@ -1268,6 +1354,7 @@ Special thanks to:
 - **Documentation**: 3 new guides (2,700+ lines), 4 working examples
 
 #### Attribute Modification & Deletion
+
 - **ModifyCompactAttribute()** - Modify attributes in object headers (84-100% coverage)
 - **DeleteCompactAttribute()** - Delete attributes from object headers
 - **ModifyDenseAttribute()** - Modify attributes in dense storage (B-tree + fractal heap)
@@ -1277,6 +1364,7 @@ Special thanks to:
 - **Coverage**: 84-100% per function with table-driven tests
 
 #### Comprehensive Test Coverage (77.8%)
+
 - **Coverage Improvement**: 43.6% → 77.8% (+34.2% for internal/core)
 - **New Test Files**: 30+ files (8,000+ lines of professional tests)
 - **Integration Tests**: B-tree v1 parsing (94.2% coverage), Dataset readers (50-87% coverage)
@@ -1287,12 +1375,14 @@ Special thanks to:
 ### 🐛 Fixed
 
 #### CI/CD Optimization
+
 - **Test Workflow** - Added `-short` flag to skip performance tests in CI
 - **go vet** - Optimized to run only on ubuntu-latest (3x faster CI)
 - **WSL2 Support** - Enhanced WSL2 support in pre-release script for race detector
 - **Windows File Locking** - Fixed t.TempDir() issues with project-local `tmp/` directory
 
 #### Linter Issues (23 Fixed)
+
 - **commentedOutCode** - Disabled false positives in `.golangci.yml`
 - **preferStringWriter** - Changed buf.Write([]byte(...)) to buf.WriteString(...) (8 occurrences)
 - **unused** - Removed unused test helpers (6 functions)
@@ -1303,6 +1393,7 @@ Special thanks to:
 ### 📚 Documentation
 
 #### New Guides (2,700+ lines)
+
 - **docs/guides/rebalancing-api.md** (1,015 lines) - Complete API reference
 - **docs/guides/performance-tuning.md** (1,293 lines) - Performance optimization guide
 - **docs/guides/PERFORMANCE.md** (481 lines) - Performance best practices
@@ -1344,6 +1435,7 @@ Special thanks to:
 ### ✨ Added
 
 #### Dense Attribute Reading (Phase 3 RMW Complete)
+
 - **Full dense attribute reading** - Read attributes stored in fractal heap + B-tree v2
 - **Self-contained implementation** - No circular dependencies, clean architecture
 - **Variable-length heap ID parsing** - Correct offset/length extraction based on heap header
@@ -1355,6 +1447,7 @@ Special thanks to:
 - **Coverage**: 86.1% (exceeds >70% target)
 
 #### RMW Support for Dense Storage
+
 - **LoadFromFile()** methods - Load existing fractal heap and B-tree v2 from file
 - **WriteAt()** methods - In-place updates for existing structures
 - **Integration tests** - Full round-trip validation with 11 attributes
@@ -1364,20 +1457,24 @@ Special thanks to:
 ### 🐛 Fixed
 
 #### Address Management Issues
+
 - **Object header + fractal heap overlap** - Fixed address allocation to prevent overlap
 - **Space tracking** - Proper coordination between object header writer and allocator
 
 #### B-tree v2 Growth Handling
+
 - **Leaf node expansion** - Allocate full node size when leaf becomes full
 - **Correct capacity** - Fixed from 3 to 7 records per leaf (LeafMaxNumRecords)
 - **Integration with allocator** - Proper address management during growth
 
 #### Type Conversion in Attribute Reading
+
 - **ReadValue() usage** - Changed from raw Data access to proper type conversion
 - **String datatype support** - Added DatatypeString case to ReadValue()
 - **All datatypes working** - int32, int64, float32, float64, fixed-length strings
 
 ### 🔧 Implementation Details
+
 - **Variable-length heap IDs** - Format: 1 byte flags + HeapOffsetSize + HeapLengthSize
 - **BlockOffset calculation** - Relative addressing: heapOffset - blockOffset
 - **B-tree record format** - 7-byte heap IDs (8th byte is padding)
@@ -1385,6 +1482,7 @@ Special thanks to:
 - **Integration validation** - Round-trip tests with h5dump verification (where available)
 
 ### 📊 Quality Metrics
+
 - **Test Coverage**: 86.1% overall (target: >70%) ✅
 - **Core Tests**: 100% passing ✅
 - **RMW Integration Tests**: 6/6 scenarios working (100%) ✅
@@ -1392,6 +1490,7 @@ Special thanks to:
 - **Code Quality**: Self-contained, no circular dependencies ✅
 
 ### 🧹 Code Quality Improvements
+
 - **Linter fixes**: 27 → 7 issues (20 fixed)
   - gocritic: Fixed appendAssign, commented code, octal literals
   - godot: Added periods to comments
@@ -1404,12 +1503,14 @@ Special thanks to:
 - **Remaining 7**: Acceptable warnings (complex functions, API design)
 
 ### ⚠️ Known Limitations (v0.11.3-beta)
+
 - **Indirect blocks** - Not yet supported (direct blocks only, ~90% use case)
 - **Huge objects** - Not yet supported (managed objects only)
 - **Attribute modification** - Write-once only (no updates/deletion)
 - **Compound types** - Not yet supported for attributes
 
 ### 🔗 Reference
+
 - H5Adense.c - Dense attribute storage
 - H5HF*.c - Fractal heap implementation
 - H5B2*.c - B-tree v2 implementation
@@ -1426,6 +1527,7 @@ Special thanks to:
 ### ✨ Added
 
 #### Superblock v0 Write Support
+
 - **96-byte legacy format** - Symbol Table Entry format (HDF5 < 1.8)
 - **Maximum compatibility** - Files readable by oldest HDF5 tools
 - **Root group caching** - B-tree and heap addresses cached in superblock
@@ -1434,6 +1536,7 @@ Special thanks to:
 - **Tests**: Integration test validates v0 file creation with h5dump
 
 #### Object Header v1 Write Support
+
 - **16-byte fixed header** - Legacy format (vs 4-byte minimum in v2)
 - **Fixed-size message headers** - 8 bytes per message header
 - **Reference count field** - Always 1 for new files
@@ -1444,12 +1547,14 @@ Special thanks to:
 - **Tests**: Round-trip validation, h5dump verification
 
 ### 🔧 Implementation Details
+
 - **Sequential write order** - Object Header → B-tree → Heap (prevents sparse files on Windows)
 - **Safe type conversions** - Added nolint comments for validated conversions
 - **Message size calculation** - Correctly excludes message data from Object Header Size field
 - **h5dump validation** - Files successfully open in official HDF5 tools
 
 ### 📊 Quality Metrics
+
 - **Test Coverage**: 89.7% in internal/ (target: >70%) ✅
 - **All Tests**: 100% passing ✅
 - **Linter**: 0 issues (34+ linters) ✅
@@ -1457,10 +1562,12 @@ Special thanks to:
 - **Binary match**: Exact match with HDF5 C library at byte level ✅
 
 ### 🧹 Cleanup
+
 - **No Python dependencies** - Removed Python test file generator (pure Go project)
 - **Private proposals** - Moved internal planning docs to .gitignore
 
 ### 🔗 Reference
+
 - H5Fsuper.c - Superblock v0 format
 - H5Oflush.c, H5Ocache.c - Object Header v1 format
 - testdata/v0.h5 - Official HDF5 C library generated reference file
@@ -1477,6 +1584,7 @@ Special thanks to:
 ### ✨ Added
 
 #### Chunked Dataset Storage (~4 hours)
+
 - **Chunked layout** - Split large datasets into chunks for efficient I/O
 - **GZIP compression** - Deflate filter for data compression
 - **Shuffle filter** - Byte-shuffling for better compression
@@ -1486,6 +1594,7 @@ Special thanks to:
 - **Coverage**: 89.6% (writer package)
 
 #### Dense Groups (All 4 Phases ~6 hours, saved 4 by architecture!)
+
 - **Fractal Heap** - Compact heap for link messages (WritableFractalHeap)
 - **B-tree v2** - Fast name→heap_id indexing (WritableBTreeV2)
 - **Link Info Message** - Dense storage metadata
@@ -1496,6 +1605,7 @@ Special thanks to:
 - **Coverage**: 91.3% (structures package)
 
 #### Attribute Writing (Phases 1-2 ~6 hours, saved 4 by reuse!)
+
 - **Compact attributes (0-7)** - Stored in object header messages
 - **Dense attributes (8+)** - REUSED Fractal Heap + B-tree v2 from Dense Groups!
 - **Automatic transition** - Compact → dense at 8 attributes or header full
@@ -1507,12 +1617,14 @@ Special thanks to:
 - **Coverage**: 70.2% overall, 89.6% writer
 
 ### 🏗️ Architecture Improvements
+
 - **FileWriter.Reader()** - Returns `io.ReaderAt` interface (not concrete type)
 - **Interface-based design** - Program to interfaces, not implementations
 - **Code reuse success** - Dense attributes reused heap/B-tree → saved ~8 hours!
 - **Dependency Inversion** - Proper Go 2025 patterns
 
 ### 📊 Quality Metrics
+
 - **Test Coverage**: 70.2% overall (target: >70%) ✅
 - **All Tests**: 100% passing ✅
 - **Code Quality**: 0 lint issues (34+ linters, golangci-lint) ✅
@@ -1520,12 +1632,14 @@ Special thanks to:
 - **Clean History**: 6 commits (after rebase from 11)
 
 ### ⚠️ Known Limitations (v0.11.1-beta)
+
 - **Dense storage read-modify-write** - Adding to existing dense storage after file reopen (v0.11.2-beta)
 - **Attribute modification** - Write-once only (no updates)
 - **Attribute deletion** - Not yet supported
 - **Compound types** - Not yet supported for attributes
 
 ### 🔗 Reference
+
 - H5Aint.c, H5Adense.c - Attribute implementation
 - H5Gstab.c, H5Gdense.c - Group storage formats
 - H5Dchunk.c, H5Z.c - Chunked storage and filters
@@ -1544,6 +1658,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 ### ✨ Added
 
 #### Component 1: File Creation & Setup (~3 hours)
+
 - **File creation API** - `CreateForWrite(filename, mode)` with Truncate/Exclusive modes
 - **Superblock v2 writing** - HDF5 1.8+ format with 8-byte offsets
 - **Root group creation** - Automatic root group initialization
@@ -1553,6 +1668,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 88.6% (allocator), 100% validated
 
 #### Component 2: Dataset Writing (~4 hours)
+
 - **Dataset creation API** - `CreateDataset(name, dtype, dims, ...opts)`
 - **Contiguous layout** - Sequential data storage (MVP)
 - **All basic datatypes** - int8-64, uint8-64, float32/64, strings
@@ -1563,6 +1679,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 87.3%
 
 #### Component 3: Groups & Navigation (~4 hours)
+
 - **Group creation API** - `CreateGroup(path)` with parent auto-creation
 - **Symbol table** - Legacy group format (backwards compatible)
 - **B-tree v1** - Group indexing for fast lookups
@@ -1574,6 +1691,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 92.4% (structures)
 
 #### Component 4: Attributes Infrastructure (~1 hour)
+
 - **Attribute API** - `WriteAttribute(name, value)` infrastructure
 - **Message encoding** - Complete attribute message support
 - **Type inference** - Automatic datatype detection from Go values
@@ -1584,6 +1702,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 94.1%
 
 #### Component 5: Free Space Management (~3.5 hours)
+
 - **Allocator validation** - Existing allocator 80% complete, validated to 100%
 - **End-of-file allocation** - Simple strategy, no fragmentation
 - **8-byte alignment** - HDF5 format compliance
@@ -1594,6 +1713,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 100%
 
 #### Advanced Datatypes Support (~3 hours)
+
 - **Arrays** (10 types) - Fixed-size arrays with multi-dimensional support
   - ArrayInt8, ArrayInt16, ArrayInt32, ArrayInt64
   - ArrayUint8, ArrayUint16, ArrayUint32, ArrayUint64
@@ -1613,6 +1733,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Coverage**: 76-100% (average 94.1%)
 
 #### Code Quality Refactoring (~2.5 hours)
+
 - **Registry pattern implementation** - Go-idiomatic approach for datatype handling
 - **Complexity reduction** - getDatatypeInfo: 60+ lines → 5 lines (O(1) lookup)
 - **CreateDataset simplification** - 80+ lines of switches → 3-line delegation
@@ -1622,12 +1743,14 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Pattern**: Used in stdlib (encoding/json, database/sql, net/http)
 
 ### 🐛 Fixed
+
 - **Null terminator bug** - Local heap string storage (Component 3)
 - **Object discovery** - Full round-trip now works (write → close → reopen → discover)
 - **Lint issues** - Resolved 95 → 0 lint warnings across codebase
 - **Complexity** - Reduced cyclomatic/cognitive complexity using registry pattern
 
 ### 📊 Metrics
+
 - **Total effort**: ~20 hours (vs 6-8 weeks estimated)
 - **Productivity**: 25x faster than traditional development
 - **Test coverage**: 88.6% internal packages (>70% target)
@@ -1636,6 +1759,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - **Code added**: ~3,500 LOC (production + tests)
 
 ### 🎯 v0.11.0-beta Status
+
 - ✅ File creation
 - ✅ Dataset writing (contiguous layout, all datatypes including advanced)
 - ✅ Group creation (symbol table format)
@@ -1645,6 +1769,7 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - ✅ Code quality (registry pattern, zero lint issues)
 
 ### 📝 Known Limitations (MVP)
+
 - Contiguous layout only (chunked in next beta v0.11.1-beta)
 - Symbol table groups (Link Info in next beta)
 - Compact attributes deferred (object header modification in next beta)
@@ -1652,12 +1777,14 @@ Sprint completed in record time (20 hours vs 6-8 weeks estimated, **25x faster**
 - Files not h5dump-readable (object header compatibility issue, acceptable for MVP)
 
 ### 🚀 Next: v0.11.1-beta (Continue Write Features)
+
 - Chunked datasets + compression (GZIP, Shuffle, Fletcher32)
 - Dense groups (Link Info, B-tree v2)
 - Object header modification for compact attributes
 - Hard/soft/external links
 
 ### 🎯 Then: v0.12.0-rc.1 (Feature Complete)
+
 - All remaining features (see ROADMAP.md)
 - API freeze
 - Community testing begins
@@ -1676,6 +1803,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 ### ✨ Added
 
 #### Object Header v1 Support (2025-10-28)
+
 - **Legacy format support** - Full v1 object header parsing with continuation blocks
 - **Backwards compatibility** - Pre-HDF5 1.8 files now readable
 - **Coverage**: 87-100% test coverage for v1 functions
@@ -1684,6 +1812,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Time**: 1 session (~1 hour vs estimated 2-3 days!)
 
 #### Full Attribute Reading (2025-10-29)
+
 - **Compact attributes** - Complete support for attributes in object headers
 - **Dense attributes** - Fractal heap infrastructure (direct blocks)
 - **AttributeInfo message** - Parse 0x000F message for dense storage metadata
@@ -1695,6 +1824,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Known limitation**: Dense attributes need B-tree v2 (deferred to v0.11.0, <10% impact)
 
 #### TODO Resolution (2025-10-29)
+
 - **5 TODOs resolved** - Complete codebase cleanup
 - **Implemented** (2 items):
   - Group.Attributes() method with address tracking
@@ -1706,6 +1836,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Result**: Zero TODO/FIXME/XXX comments remaining
 
 #### Extensive Testing (2025-10-29)
+
 - **Reference test suite** - 57 official HDF5 C library test files
 - **100% pass rate** - All 57 files readable and validated
 - **Bug fix** - V0 superblock B-tree address parsing corrected
@@ -1714,6 +1845,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Coverage**: Comprehensive object, dataset, group, attribute validation
 
 #### Documentation Completion (2025-10-29)
+
 - **New Guides** (5 files, ~2,500 LOC):
   - `docs/guides/INSTALLATION.md` - Platform-specific setup
   - `docs/guides/READING_DATA.md` - 50+ code examples
@@ -1727,17 +1859,20 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Total**: 14 files, 4,450+ lines of professional documentation
 
 #### Pre-Release Automation (2025-10-29)
+
 - **Validation script** - `scripts/pre-release-check.sh` (260 LOC)
 - **12 quality checks** - Matches CI requirements exactly
 - **Updated guides** - RELEASE_GUIDE.md, CLAUDE.md documentation
 
 ### 🐛 Fixed
+
 - **Empty attribute crash** - Added length check in ReadValue()
 - **Test buffer overflow** - Fixed buffer sizing in attribute tests
 - **Dataspace type not set** - Tests now properly set scalar/array type
 - **V0 superblock parsing** - Fixed B-tree address reading at offset 80
 
 ### 📚 Documentation
+
 - **User guides** - 5 comprehensive guides (Installation, Reading Data, Datatypes, Troubleshooting, FAQ)
 - **Example documentation** - 5 detailed README files with walkthroughs
 - **RELEASE_GUIDE.md** - Complete release process with pre-release script
@@ -1745,6 +1880,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **ADR updates** - Architectural decisions documented
 
 ### 📊 Quality Metrics
+
 - **Test coverage**: 76.3% overall, 100% for internal/utils (maintained >70% target)
 - **Reference tests**: 57/57 files pass (100% - official HDF5 C library test suite)
 - **Lint issues**: 0 (34+ linters, strict quality gates)
@@ -1754,6 +1890,7 @@ Sprint completed ahead of schedule (2 days vs estimated 2-4 weeks) using go-seni
 - **Sprint velocity**: 15-30x faster with go-senior-architect agent! 🚀
 
 ### ✨ Highlights
+
 - **Feature-complete read support** - All HDF5 read features implemented
 - **Production-ready** - Zero lint issues, comprehensive tests, complete documentation
 - **C library validated** - 100% compatibility with official HDF5 test files
@@ -1771,12 +1908,14 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 ### ✨ Added
 
 #### Core Features
+
 - **Pure Go implementation** - No CGo dependencies, works on all Go-supported platforms
 - **HDF5 format reading** - Comprehensive support for HDF5 file structure
 - **File operations** - Open, Close, Walk file tree
 - **Multiple superblock versions** - v0, v2, v3 support
 
 #### File Structure Support
+
 - **Object headers** - Full v2 support with continuation messages
 - **Groups**:
   - Traditional groups (symbol tables with SNOD signature)
@@ -1786,6 +1925,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - **Global heap** - Variable-length data storage
 
 #### Dataset Reading
+
 - **Layout types**:
   - Compact layout (data stored in object header)
   - Contiguous layout (data stored continuously)
@@ -1794,6 +1934,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - **Full data reading** - Read dataset values into Go types
 
 #### Datatypes
+
 - **Fixed-point integers** - int32, int64
 - **Floating-point** - float32, float64
 - **Strings**:
@@ -1803,6 +1944,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - **Type conversion** - Automatic conversion to Go native types
 
 #### Developer Experience
+
 - **Simple API** - Easy-to-use public interface
 - **Type safety** - Strong typing with Go interfaces
 - **Error handling** - Contextual error messages
@@ -1811,12 +1953,14 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - **Documentation** - Complete guides and API reference
 
 #### Quality Assurance
+
 - **Comprehensive testing** - Unit and integration tests
 - **Linting** - 34+ linters enabled via golangci-lint (0 issues)
 - **Test files** - Extensive test file suite
 - **Production-ready code** - Clean, well-documented codebase
 
 ### 📚 Documentation
+
 - Quick Start Guide
 - Architecture Overview
 - Development Roadmap (write support timeline)
@@ -1825,6 +1969,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - Using C Reference guide
 
 ### 🔧 Development Tools
+
 - golangci-lint configuration
 - Test file generators (Python scripts)
 - HDF5 dump utility
@@ -1832,6 +1977,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - Makefile for common tasks
 
 ### ⚠️ Known Limitations
+
 - **Read-only** - Write support planned for v2.0
 - **Object header v1** - Legacy format not fully supported
 - **Fractal heap** - Not implemented (affects some attribute storage)
@@ -1841,6 +1987,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 - **External storage** - Virtual datasets and external files not supported
 
 ### 📊 Statistics
+
 - **Production readiness**: ~98% for common HDF5 files
 - **Test coverage**: Extensive unit and integration tests
 - **Linter issues**: 0 (all code passes 34+ linters)
@@ -1853,6 +2000,7 @@ First beta release of the pure Go HDF5 library! ~98% production-ready for readin
 See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 
 ### v0.10.0-beta - Complete Read Support ✅ **RELEASED 2025-10-29**
+
 - [x] Test coverage >70% ✅ **76.3%**
 - [x] Object header v1 support ✅
 - [x] Full attribute reading ✅
@@ -1861,6 +2009,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 - [x] Documentation completion (5 guides, 5 examples) ✅
 
 ### v0.11.0-beta (2-3 months) - MVP Write Support
+
 - File creation
 - Basic dataset writing (contiguous layout)
 - Group creation
@@ -1868,6 +2017,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 - Simple attributes
 
 ### v0.12.0-beta / v1.0.0 (5-6 months) - Full Read/Write
+
 - Chunked datasets with compression
 - Dataset updates and resizing
 - Full attribute writing
@@ -1888,4 +2038,4 @@ See [ROADMAP.md](ROADMAP.md) for detailed future plans:
 
 ---
 
-*Last Updated: 2025-10-29*
+_Last Updated: 2025-10-29_
