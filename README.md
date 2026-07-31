@@ -2,17 +2,15 @@
 
 > Pure Go implementation of the HDF5 file format — no CGo required
 
-[![Release](https://img.shields.io/github/v/release/shyrmapp/hdf5?include_prereleases&style=flat-square&logo=github&color=blue&label=version)](https://github.com/shyrmapp/hdf5/releases)
+[![Version](https://img.shields.io/github/v/tag/shyrmapp/hdf5?style=flat-square&logo=github&color=blue&label=version)](https://github.com/shyrmapp/hdf5/tags)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/shyrmapp/hdf5?style=flat-square&logo=go)](https://go.dev)
 [![Go Report Card](https://goreportcard.com/badge/github.com/shyrmapp/hdf5?style=flat-square)](https://goreportcard.com/report/github.com/shyrmapp/hdf5)
-[![GoDoc](https://img.shields.io/badge/godoc-reference-blue?style=flat-square&logo=go)](https://pkg.go.dev/github.com/shyrmapp/hdf5)
 [![CI](https://img.shields.io/github/actions/workflow/status/shyrmapp/hdf5/test.yml?branch=main&style=flat-square&logo=github&label=tests)](https://github.com/shyrmapp/hdf5/actions)
-[![codecov](https://codecov.io/gh/shyrmapp/hdf5/graph/badge.svg)](https://codecov.io/gh/shyrmapp/hdf5)
 [![License](https://img.shields.io/github/license/shyrmapp/hdf5?style=flat-square&color=blue)](https://github.com/shyrmapp/hdf5/blob/main/LICENSE)
 
-Reads files produced by any HDF5 1.x/2.x library — including the 2.x "latest"
+Reads files written by HDF5 1.x and 2.x libraries, including the 2.x "latest"
 format (data layout v4/v5 with modern chunk indexes), complex datatypes, and
-float16. Write output is validated against the official HDF5 tools
+float16. Write output is round-tripped through the official HDF5 tools
 (h5dump/h5diff/h5repack) in CI.
 
 This is the maintained hard fork of [scigolib/hdf5](https://github.com/scigolib/hdf5).
@@ -82,12 +80,13 @@ instances are independent. See [ROADMAP.md](ROADMAP.md).
 
 ## Validation
 
-- Official HDF5 test suite: 433 files, 100% pass rate
-  ([known exclusions](testdata/hdf5_official/KNOWN_FAILURES.md))
-- C-library interop testbench in CI (h5dump/h5diff/h5repack)
-- 88%+ test coverage on library packages, 0 lint issues (34+ linters)
-- Hardened against malformed files: overflow-checked allocation, size
-  limits, security regression tests (4 upstream CVEs covered)
+- Tested against the official HDF5 test corpus (433 files;
+  [documented exclusions](testdata/hdf5_official/KNOWN_FAILURES.md) for
+  multi-file and intentionally corrupt inputs)
+- C-library interop testbench in CI: written files verified with
+  h5dump/h5diff/h5repack
+- Defenses against malformed files: overflow-checked allocation, size
+  limits, security regression tests
 
 ## Documentation
 
