@@ -14,7 +14,7 @@ import (
 // returned bytes are the raw UTF-8/ASCII characters without a null terminator.
 //
 // C Reference: H5Tvlen.c, H5HG.c (global heap object retrieval).
-func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([][]byte, error) {
+func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxBytes uint64) ([][]byte, error) {
 	// 1. Extract required messages from object header.
 	var datatypeMsg, dataspaceMsg, layoutMsg *HeaderMessage
 
@@ -80,13 +80,9 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
+			return nil, err
 		}
 
 	case layout.IsChunked():
@@ -102,7 +98,7 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock) (
 			}
 		}
 
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

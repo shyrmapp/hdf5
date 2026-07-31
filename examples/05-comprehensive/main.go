@@ -128,7 +128,7 @@ func demonstrateDataset(file *hdf5.File, ds *hdf5.Dataset) {
 		if dt == nil || !dt.IsCompound() {
 			continue
 		}
-		values, err := core.ReadDatasetCompound(file.Reader(), header, file.Superblock())
+		values, err := core.ReadDatasetCompound(file.Reader(), header, file.Superblock(), 0)
 		if err != nil {
 			continue
 		}

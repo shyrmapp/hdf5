@@ -13,7 +13,7 @@ import (
 type CompoundValue map[string]interface{}
 
 // ReadDatasetCompound reads a dataset with compound datatype and returns array of compound values.
-func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([]CompoundValue, error) {
+func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxBytes uint64) ([]CompoundValue, error) {
 	// 1. Extract required messages.
 	var datatypeMsg, dataspaceMsg, layoutMsg, filterPipelineMsg *HeaderMessage
 
@@ -92,16 +92,13 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock) ([
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		dataSize := totalElements * uint64(datatype.Size)
-		rawData = make([]byte, dataSize)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(rawData, int64(layout.DataAddress))
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
+			return nil, err
 		}
 
 	case layout.IsChunked():
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

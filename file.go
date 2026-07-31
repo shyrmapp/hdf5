@@ -19,11 +19,45 @@ type File struct {
 	root          *Group
 	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
 	loadingGroups map[uint64]bool // Groups on the current load path (hard-link cycle guard)
+	maxReadBytes  uint64          // Ceiling for a single whole-dataset read; 0 = default
+}
+
+// OpenOption configures how a file is opened.
+type OpenOption func(*File)
+
+// WithMaxReadBytes sets the ceiling for a single whole-dataset read, such as
+// [Dataset.Read] or [Dataset.ReadStrings]. The default is 1 GiB.
+//
+// Set this if you read files you did not produce. How big a dataset claims to
+// be is a number taken from the file, and a 6 KiB file can legitimately claim
+// to hold tens of gigabytes. Go cannot recover from an allocation that
+// exhausts memory — it is a fatal runtime error, not a panic — so the claim is
+// checked before any allocation, and the ceiling is what that check compares
+// against. Sizing it to your data turns a hostile file into an error instead
+// of a dead process.
+//
+// Pick the limit from the largest dataset you expect, with some headroom, not
+// from the memory of the machine you happen to run on. A limit derived from
+// available RAM makes the same file succeed on one host and fail on another,
+// and makes a bigger host accept a bigger hostile allocation.
+//
+//	// largest real product is ~105 MiB once widened to float64
+//	f, err := hdf5.Open(name, hdf5.WithMaxReadBytes(256<<20))
+//
+// The limit counts the memory the call allocates, not the bytes stored on
+// disk. Reading an int8 dataset through [Dataset.Read] yields float64, so it
+// costs 8 bytes per element, not 1.
+//
+// To read data larger than the limit without raising it, use
+// [Dataset.ReadSlice] or [Dataset.ChunkIterator], which read in pieces and are
+// bounded by the size of each piece.
+func WithMaxReadBytes(n uint64) OpenOption {
+	return func(f *File) { f.maxReadBytes = n }
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.
 // The file must be a valid HDF5 file with a supported format version.
-func Open(filename string) (*File, error) {
+func Open(filename string, opts ...OpenOption) (*File, error) {
 	//nolint:gosec // G304: User-provided filename is intentional for HDF5 file library
 	f, err := os.Open(filename)
 	if err != nil {
@@ -55,6 +89,9 @@ func Open(filename string) (*File, error) {
 		sb:            sb,
 		visitedBTrees: make(map[uint64]bool),
 		loadingGroups: make(map[uint64]bool),
+	}
+	for _, opt := range opts {
+		opt(file)
 	}
 
 	// Validate root group address.

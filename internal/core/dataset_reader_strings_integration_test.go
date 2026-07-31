@@ -102,7 +102,7 @@ func TestReadDatasetStrings_ErrorCases(t *testing.T) {
 			emptyFile := &emptyReaderAt{}
 
 			// Call function - should return error
-			data, err := ReadDatasetStrings(emptyFile, tt.header, tt.sb)
+			data, err := ReadDatasetStrings(emptyFile, tt.header, tt.sb, 0)
 
 			// Verify error occurred
 			require.Error(t, err)
@@ -135,7 +135,7 @@ func TestReadDatasetStrings_EmptyDataset(t *testing.T) {
 	emptyFile := &emptyReaderAt{}
 
 	// Read empty dataset
-	data, err := ReadDatasetStrings(emptyFile, header, sb)
+	data, err := ReadDatasetStrings(emptyFile, header, sb, 0)
 	require.NoError(t, err)
 	require.Empty(t, data)
 }

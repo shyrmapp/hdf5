@@ -32,7 +32,7 @@ func TestReadDatasetCompound_RealFile(t *testing.T) {
 	// objHeader, err := findObjectByPath(f, sb, "/compound_dataset")
 	// require.NoError(t, err)
 	//
-	// data, err := ReadDatasetCompound(f, objHeader, sb)
+	// data, err := ReadDatasetCompound(f, objHeader, sb, 0)
 	// require.NoError(t, err)
 	// require.NotEmpty(t, data)
 }
@@ -123,7 +123,7 @@ func TestReadDatasetCompound_ErrorCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			emptyReader := &emptyReaderAt{}
 
-			data, err := ReadDatasetCompound(emptyReader, tt.header, tt.sb)
+			data, err := ReadDatasetCompound(emptyReader, tt.header, tt.sb, 0)
 
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantErr)
