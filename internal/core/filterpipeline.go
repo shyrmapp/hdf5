@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // FilterID represents HDF5 filter identifiers.
@@ -163,7 +165,15 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 // filterMask is the chunk's filter exclusion mask: bit i set means pipeline
 // filter i was skipped at write time (H5Z semantics), e.g. an optional
 // compression filter that did not shrink the chunk.
-func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32) ([]byte, error) {
+// maxOutput bounds what any single decompression step may produce. HDF5 chunks
+// are fixed-size — even edge chunks are stored full-size — so the caller knows
+// exactly how many bytes a chunk must decompress to, and anything beyond that
+// is a malformed or hostile file rather than legitimate data. Pass 0 when the
+// expected size is genuinely unknown and MaxChunkSize is used instead.
+func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32, maxOutput uint64) ([]byte, error) {
+	if maxOutput == 0 || maxOutput > utils.MaxChunkSize {
+		maxOutput = utils.MaxChunkSize
+	}
 	if fp == nil || len(fp.Filters) == 0 {
 		return data, nil
 	}
@@ -180,7 +190,7 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32) ([
 			continue
 		}
 
-		filtered, err := applyFilter(filter, result)
+		filtered, err := applyFilter(filter, result, maxOutput)
 		if err != nil {
 			return nil, fmt.Errorf("filter %d (%s) failed: %w", filter.ID, filterName(filter.ID), err)
 		}
@@ -205,10 +215,10 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32) ([
 }
 
 // applyFilter applies a single filter.
-func applyFilter(filter Filter, data []byte) ([]byte, error) {
+func applyFilter(filter Filter, data []byte, maxOutput uint64) ([]byte, error) {
 	switch filter.ID {
 	case FilterDeflate:
-		return applyDeflate(data)
+		return applyDeflate(data, maxOutput)
 
 	case FilterShuffle:
 		return applyShuffle(data, filter.ClientData)
@@ -218,7 +228,7 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 		return applyFletcher32(data)
 
 	case FilterBZIP2:
-		return applyBZIP2(data)
+		return applyBZIP2(data, maxOutput)
 
 	case FilterLZF:
 		// LZF filter: check if data is actually uncompressed.
@@ -231,7 +241,7 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 				return data, nil
 			}
 		}
-		return applyLZF(data)
+		return applyLZF(data, maxOutput)
 
 	case FilterSZIP:
 		return applySZIP(filter.ClientData, data)
@@ -247,7 +257,7 @@ func applyFilter(filter Filter, data []byte) ([]byte, error) {
 // Compatibility fallback: releases of this library up to v0.14 wrote
 // gzip-wrapped (RFC 1952) streams instead of zlib (RFC 1950). Sniff the
 // gzip magic so those files stay readable.
-func applyDeflate(data []byte) ([]byte, error) {
+func applyDeflate(data []byte, maxOutput uint64) ([]byte, error) {
 	var reader io.ReadCloser
 	var err error
 	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
@@ -263,8 +273,7 @@ func applyDeflate(data []byte) ([]byte, error) {
 	}
 	defer func() { _ = reader.Close() }()
 
-	// Read all decompressed data.
-	decompressed, err := io.ReadAll(reader)
+	decompressed, err := readAllBounded(reader, maxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("deflate decompression failed: %w", err)
 	}
@@ -321,11 +330,10 @@ func applyFletcher32(data []byte) ([]byte, error) {
 // applyBZIP2 decompresses BZIP2-compressed data.
 // BZIP2 is a high-compression algorithm providing better compression than GZIP.
 // Uses stdlib compress/bzip2 for decompression.
-func applyBZIP2(data []byte) ([]byte, error) {
+func applyBZIP2(data []byte, maxOutput uint64) ([]byte, error) {
 	reader := bzip2.NewReader(bytes.NewReader(data))
 
-	// Read all decompressed data.
-	decompressed, err := io.ReadAll(reader)
+	decompressed, err := readAllBounded(reader, maxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("bzip2 decompression failed: %w", err)
 	}
@@ -335,12 +343,12 @@ func applyBZIP2(data []byte) ([]byte, error) {
 
 // applyLZF decompresses LZF-compressed data.
 // LZF is a very fast compression algorithm used by PyTables and h5py.
-func applyLZF(data []byte) ([]byte, error) {
+func applyLZF(data []byte, maxOutput uint64) ([]byte, error) {
 	if len(data) == 0 {
 		return data, nil
 	}
 
-	decompressed, err := lzfDecompress(data)
+	decompressed, err := lzfDecompress(data, maxOutput)
 	if err != nil {
 		return nil, fmt.Errorf("lzf decompression failed: %w", err)
 	}
@@ -352,10 +360,13 @@ func applyLZF(data []byte) ([]byte, error) {
 //   - Literal run (000LLLLL): L+1 bytes of uncompressed data
 //   - Short backref (RRROXXXX XXXXXXXX): 3-8 bytes from offset 1-8192
 //   - Long backref (111OXXXX XXXXXXXX RRRRRRRR): 9-264 bytes from offset 1-8192
-func lzfDecompress(input []byte) ([]byte, error) {
+func lzfDecompress(input []byte, maxOutput uint64) ([]byte, error) {
 	inLen := len(input)
 	if inLen == 0 {
 		return input, nil
+	}
+	if maxOutput == 0 || maxOutput > utils.MaxChunkSize {
+		maxOutput = utils.MaxChunkSize
 	}
 
 	// Pre-allocate output buffer (LZF typically achieves 40-50% compression).
@@ -363,6 +374,12 @@ func lzfDecompress(input []byte) ([]byte, error) {
 	inPos := 0
 
 	for inPos < inLen {
+		// Compression-bomb guard: LZF backreferences can each expand up to 264
+		// bytes, so a small input can drive an unbounded output loop.
+		if uint64(len(output)) > maxOutput {
+			return nil, fmt.Errorf(
+				"lzf: decompressed data exceeds the %d byte chunk size", maxOutput)
+		}
 		// Read control byte.
 		ctrl := input[inPos]
 		inPos++
@@ -445,4 +462,28 @@ func filterName(id FilterID) string {
 	default:
 		return fmt.Sprintf("Unknown-%d", id)
 	}
+}
+
+// readAllBounded reads r to EOF, refusing to buffer more than limit bytes.
+//
+// This is the compression-bomb guard: a chunk of a few KiB can declare
+// gigabytes of output, and io.ReadAll would faithfully allocate all of it.
+// Reading one byte past the limit is enough to tell "exactly at the limit"
+// from "over it".
+func readAllBounded(r io.Reader, limit uint64) ([]byte, error) {
+	// Normalize here rather than at the call sites: a helper where an
+	// unspecified limit silently means "unbounded" is a footgun.
+	if limit == 0 || limit > utils.MaxChunkSize {
+		limit = utils.MaxChunkSize
+	}
+
+	out, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(out)) > limit {
+		return nil, fmt.Errorf(
+			"decompressed data exceeds the %d byte chunk size; refusing to continue", limit)
+	}
+	return out, nil
 }

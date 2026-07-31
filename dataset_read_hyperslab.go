@@ -827,9 +827,15 @@ func (d *Dataset) extractFromChunk(
 		return fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Decompress if needed (using existing FilterPipelineMessage.ApplyFilters)
+	// Decompress if needed (using existing FilterPipelineMessage.ApplyFilters).
+	// An HDF5 chunk is fixed-size, so this is exactly what it must decompress
+	// to; it bounds the pipeline against compression bombs.
+	chunkBytes := elementSize
+	for _, cd := range chunkDims {
+		chunkBytes *= cd
+	}
 	if filterPipeline != nil {
-		chunkData, err = filterPipeline.ApplyFilters(chunkData, chunkInfo.filterMask)
+		chunkData, err = filterPipeline.ApplyFilters(chunkData, chunkInfo.filterMask, chunkBytes)
 		if err != nil {
 			return fmt.Errorf("failed to apply filters: %w", err)
 		}

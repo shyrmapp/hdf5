@@ -386,6 +386,16 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	dataDims := dataspace.Dimensions
 	actualChunkDims := layout.ChunkSize[:len(dataDims)]
 
+	// An HDF5 chunk is fixed-size, edge chunks included, so this is exactly
+	// what a chunk must decompress to. It bounds the filter pipeline.
+	chunkBytes := elementSize
+	for _, d := range actualChunkDims {
+		chunkBytes, err = utils.SafeMultiply(chunkBytes, d)
+		if err != nil {
+			return nil, fmt.Errorf("chunk size overflow: %w", err)
+		}
+	}
+
 	for _, chunk := range chunks {
 		// CVE-2025-7067 fix: Validate chunk size before allocation to prevent buffer overflow.
 		if err := utils.ValidateBufferSize(chunk.NBytes, utils.MaxChunkSize, "chunk data"); err != nil {
@@ -402,7 +412,7 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 
 		// Apply filters (decompression, etc) if present.
 		if filterPipeline != nil && !chunkStoredUnfiltered(layout, chunk, actualChunkDims, dataDims) {
-			chunkData, err = filterPipeline.ApplyFilters(chunkData, chunk.FilterMask)
+			chunkData, err = filterPipeline.ApplyFilters(chunkData, chunk.FilterMask, chunkBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
 			}

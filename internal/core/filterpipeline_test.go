@@ -67,7 +67,7 @@ func TestApplyDeflate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyDeflate(tt.input)
+			got, err := applyDeflate(tt.input, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -259,7 +259,7 @@ func TestApplyFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyFilter(tt.filter, tt.data)
+			got, err := applyFilter(tt.filter, tt.data, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -361,7 +361,7 @@ func TestFilterPipelineApplyFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.pipeline.ApplyFilters(tt.data, tt.filterMask)
+			got, err := tt.pipeline.ApplyFilters(tt.data, tt.filterMask, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -507,7 +507,7 @@ func TestApplyBZIP2(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyBZIP2(tt.input)
+			got, err := applyBZIP2(tt.input, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -602,7 +602,7 @@ func TestApplyLZF(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := applyLZF(tt.input)
+			got, err := applyLZF(tt.input, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -663,7 +663,7 @@ func TestLZFDecompress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := lzfDecompress(tt.input)
+			got, err := lzfDecompress(tt.input, 0)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -684,7 +684,7 @@ func TestApplyFilter_BZIP2Dispatch(t *testing.T) {
 		0x38, 0x50, 0x90, 0xE1, 0x6E, 0x65, 0x71,
 	}
 
-	got, err := applyFilter(Filter{ID: FilterBZIP2}, bzip2AAAA)
+	got, err := applyFilter(Filter{ID: FilterBZIP2}, bzip2AAAA, 0)
 	require.NoError(t, err)
 	require.Equal(t, []byte("AAAA"), got)
 }
@@ -694,7 +694,7 @@ func TestApplyFilter_LZFDispatch(t *testing.T) {
 	// LZF literal: 0x04 = 5 bytes "hello".
 	lzfData := []byte{0x04, 'h', 'e', 'l', 'l', 'o'}
 
-	got, err := applyFilter(Filter{ID: FilterLZF}, lzfData)
+	got, err := applyFilter(Filter{ID: FilterLZF}, lzfData, 0)
 	require.NoError(t, err)
 	require.Equal(t, []byte("hello"), got)
 }
@@ -708,14 +708,14 @@ func TestApplyFilter_LZFUncompressedPassthrough(t *testing.T) {
 		ClientData: []uint32{0, 0, 5}, // cd_values[2] = 5 = len(data)
 	}
 
-	got, err := applyFilter(filter, raw)
+	got, err := applyFilter(filter, raw, 0)
 	require.NoError(t, err)
 	require.Equal(t, raw, got)
 }
 
 // TestApplyFilter_UnknownFilter tests that unknown filter IDs produce an error.
 func TestApplyFilter_UnknownFilter(t *testing.T) {
-	_, err := applyFilter(Filter{ID: FilterID(12345)}, []byte{0x01})
+	_, err := applyFilter(Filter{ID: FilterID(12345)}, []byte{0x01}, 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported filter ID")
 }
