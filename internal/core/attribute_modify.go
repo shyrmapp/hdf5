@@ -154,8 +154,10 @@ func DeleteDenseAttribute(heap HeapWriter, btree BTreeWriter, name string) error
 	return nil
 }
 
-// HeapWriter interface for dense attribute modification.
-// This abstracts fractal heap operations for testing and modularity.
+// HeapWriter is the fractal-heap surface needed for dense attribute modification.
+// It exists because the concrete implementation (structures.WritableFractalHeap)
+// lives in internal/structures, which imports this package — so core cannot name
+// the type directly without an import cycle.
 type HeapWriter interface {
 	GetObject(heapID []byte) ([]byte, error)
 	OverwriteObject(heapID []byte, newData []byte) error
@@ -163,8 +165,9 @@ type HeapWriter interface {
 	InsertObject(data []byte) ([]byte, error)
 }
 
-// BTreeWriter interface for dense attribute modification.
-// This abstracts B-tree v2 operations for testing and modularity.
+// BTreeWriter is the v2 B-tree surface needed for dense attribute modification.
+// Same import-cycle reason as HeapWriter: structures.WritableBTreeV2 cannot be
+// named from this package.
 type BTreeWriter interface {
 	SearchRecord(name string) ([]byte, bool)
 	UpdateRecord(name string, newHeapID uint64) error

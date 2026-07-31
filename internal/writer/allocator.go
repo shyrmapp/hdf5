@@ -169,58 +169,6 @@ func (a *Allocator) Allocate(size uint64) (uint64, error) {
 	return addr, nil
 }
 
-// IsAllocated checks if an address range overlaps with any allocated blocks.
-//
-// This method is useful for validation and debugging to ensure no
-// overlapping writes occur. It performs a linear scan over all allocated blocks.
-//
-// Overlap Detection Logic:
-//   - Two ranges [a1,a2) and [b1,b2) overlap if: a1 < b2 && b1 < a2
-//   - Adjacent blocks (touching boundaries) do NOT overlap
-//   - Zero-size ranges never overlap (returns false)
-//
-// Parameters:
-//   - offset: Starting address of range to check
-//   - size: Size of range to check
-//
-// Returns:
-//   - true: Range overlaps with at least one allocated block
-//   - false: Range is free (or size is 0)
-//
-// Performance:
-//   - Time: O(n) where n is number of allocated blocks
-//   - Space: O(1) - no allocations
-//
-// Use Cases:
-//   - Validation before writing to file
-//   - Debugging overlap issues
-//   - Testing allocation correctness
-//
-// Example:
-//
-//	if alloc.IsAllocated(1000, 100) {
-//	    fmt.Println("Warning: Range [1000, 1100) already allocated!")
-//	}
-func (a *Allocator) IsAllocated(offset, size uint64) bool {
-	if size == 0 {
-		return false
-	}
-
-	rangeEnd := offset + size
-
-	for _, block := range a.blocks {
-		blockEnd := block.Offset + block.Size
-
-		// Check for overlap:
-		// Two ranges [a1,a2) and [b1,b2) overlap if: a1 < b2 && b1 < a2
-		if offset < blockEnd && block.Offset < rangeEnd {
-			return true
-		}
-	}
-
-	return false
-}
-
 // EndOfFile returns the current end-of-file address.
 //
 // This is where the next allocation would occur. It represents the
@@ -244,100 +192,6 @@ func (a *Allocator) IsAllocated(offset, size uint64) bool {
 //	fmt.Printf("File size: %d bytes\n", eof)
 func (a *Allocator) EndOfFile() uint64 {
 	return a.nextOffset
-}
-
-// Blocks returns a copy of all allocated blocks, sorted by offset.
-//
-// The returned slice is a copy, so modifications do not affect the
-// allocator's internal state. Blocks are sorted by offset in ascending
-// order for consistent iteration and display.
-//
-// Returns:
-//   - []AllocatedBlock: Copy of all allocated blocks, sorted by offset
-//
-// Performance:
-//   - Time: O(n log n) where n is number of blocks (due to sorting)
-//   - Space: O(n) - allocates copy of blocks
-//
-// Use Cases:
-//   - Debugging allocation patterns
-//   - Testing allocator state
-//   - Visualizing file layout
-//   - Calculating total allocated space
-//
-// Example:
-//
-//	blocks := alloc.Blocks()
-//	for _, block := range blocks {
-//	    fmt.Printf("Block: [%d, %d) size=%d\n",
-//	        block.Offset, block.Offset+block.Size, block.Size)
-//	}
-//
-//	// Calculate total allocated space
-//	var total uint64
-//	for _, block := range blocks {
-//	    total += block.Size
-//	}
-func (a *Allocator) Blocks() []AllocatedBlock {
-	// Make a copy to prevent external modification
-	blocks := make([]AllocatedBlock, len(a.blocks))
-	copy(blocks, a.blocks)
-
-	// Sort by offset for consistent output
-	sort.Slice(blocks, func(i, j int) bool {
-		return blocks[i].Offset < blocks[j].Offset
-	})
-
-	return blocks
-}
-
-// ValidateNoOverlaps checks that no allocated blocks overlap.
-//
-// This method is primarily for debugging and testing to ensure the
-// allocator maintains correct state. In a correctly functioning allocator
-// with end-of-file allocation, overlaps should NEVER occur.
-//
-// Detection Logic:
-//   - Sorts blocks by offset
-//   - Checks that each block ends before the next block starts
-//   - Adjacent blocks (touching boundaries) are NOT considered overlapping
-//
-// Returns:
-//   - nil: No overlaps detected (allocator state is valid)
-//   - error: Overlap detected (indicates allocator bug)
-//
-// Performance:
-//   - Time: O(n log n) where n is number of blocks (due to sorting)
-//   - Space: O(n) - allocates sorted copy of blocks
-//
-// Use Cases:
-//   - Debugging allocator implementation
-//   - Pre-release validation
-//   - Testing allocation correctness
-//   - Detecting memory corruption
-//
-// Example:
-//
-//	if err := alloc.ValidateNoOverlaps(); err != nil {
-//	    panic(fmt.Sprintf("BUG: Allocator corrupted: %v", err))
-//	}
-func (a *Allocator) ValidateNoOverlaps() error {
-	blocks := a.Blocks() // Get sorted blocks
-
-	for i := 0; i < len(blocks)-1; i++ {
-		current := blocks[i]
-		next := blocks[i+1]
-
-		currentEnd := current.Offset + current.Size
-
-		// Check if current block extends into next block
-		if currentEnd > next.Offset {
-			return fmt.Errorf("overlap detected: block at %d (size %d) overlaps block at %d",
-				current.Offset, current.Size, next.Offset)
-		}
-	}
-
-	return nil
 }
 
 // Free returns a previously allocated block to the free list for reuse.
@@ -449,12 +303,4 @@ func (a *Allocator) shrinkTrailingFreeBlocks() {
 			break
 		}
 	}
-}
-
-// FreeBlocks returns a copy of all free blocks, sorted by offset.
-// This is primarily for testing and debugging.
-func (a *Allocator) FreeBlocks() []FreeBlock {
-	result := make([]FreeBlock, len(a.freeList))
-	copy(result, a.freeList)
-	return result
 }

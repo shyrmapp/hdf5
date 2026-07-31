@@ -257,13 +257,6 @@ func (w *FileWriter) Close() error {
 	return err
 }
 
-// File returns the underlying *os.File.
-// Use with caution - direct file operations may break allocation tracking.
-// Primarily for reading operations or advanced use cases.
-func (w *FileWriter) File() *os.File {
-	return w.file
-}
-
 // Reader returns an io.ReaderAt interface for reading from the file.
 // This is the preferred method for reading operations as it returns an interface
 // rather than a concrete type, improving testability and following Go best practices.
@@ -285,42 +278,6 @@ func (w *FileWriter) Reader() io.ReaderAt {
 // Useful for debugging and testing allocation patterns.
 func (w *FileWriter) Allocator() *Allocator {
 	return w.allocator
-}
-
-// WriteAtWithAllocation is a convenience method that allocates space and writes data.
-// Returns the address where data was written.
-//
-// This is equivalent to:
-//
-//	addr, err := writer.Allocate(uint64(len(data)))
-//	if err != nil { return 0, err }
-//	_, err = writer.WriteAt(data, int64(addr))
-//	return addr, err
-func (w *FileWriter) WriteAtWithAllocation(data []byte) (uint64, error) {
-	if len(data) == 0 {
-		return 0, fmt.Errorf("cannot write empty data")
-	}
-
-	addr, err := w.Allocate(uint64(len(data)))
-	if err != nil {
-		return 0, err
-	}
-
-	if err := w.WriteAtAddress(data, addr); err != nil {
-		return 0, err
-	}
-
-	return addr, nil
-}
-
-// Seek implements io.Seeker interface for compatibility.
-// Note: HDF5 uses absolute addressing, so seeking is rarely needed.
-func (w *FileWriter) Seek(offset int64, whence int) (int64, error) {
-	if w.file == nil {
-		return 0, fmt.Errorf("writer is closed")
-	}
-
-	return w.file.Seek(offset, whence)
 }
 
 // Ensure FileWriter implements io.ReaderAt and io.WriterAt.

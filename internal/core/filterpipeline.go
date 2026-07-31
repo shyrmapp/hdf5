@@ -256,8 +256,7 @@ func applyDeflate(data []byte) ([]byte, error) {
 			return nil, fmt.Errorf("gzip reader creation failed: %w", err)
 		}
 	} else {
-		reader, err = zlib.NewReader(io.NopCloser(io.NewSectionReader(
-			&bytesReaderAt{data}, 0, int64(len(data)))))
+		reader, err = zlib.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("zlib reader creation failed: %w", err)
 		}
@@ -323,8 +322,7 @@ func applyFletcher32(data []byte) ([]byte, error) {
 // BZIP2 is a high-compression algorithm providing better compression than GZIP.
 // Uses stdlib compress/bzip2 for decompression.
 func applyBZIP2(data []byte) ([]byte, error) {
-	reader := bzip2.NewReader(io.NopCloser(io.NewSectionReader(
-		&bytesReaderAt{data}, 0, int64(len(data)))))
+	reader := bzip2.NewReader(bytes.NewReader(data))
 
 	// Read all decompressed data.
 	decompressed, err := io.ReadAll(reader)
@@ -447,20 +445,4 @@ func filterName(id FilterID) string {
 	default:
 		return fmt.Sprintf("Unknown-%d", id)
 	}
-}
-
-// bytesReaderAt wraps []byte to implement io.ReaderAt.
-type bytesReaderAt struct {
-	data []byte
-}
-
-func (b *bytesReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
-	if off < 0 || off > int64(len(b.data)) {
-		return 0, io.EOF
-	}
-	n = copy(p, b.data[off:])
-	if n < len(p) {
-		err = io.EOF
-	}
-	return n, err
 }

@@ -1633,18 +1633,59 @@ func encodeFixedPointData(data interface{}, elemSize uint32, expectedSize uint64
 
 	buf := make([]byte, expectedSize)
 
-	switch elemSize {
-	case 1:
-		return encode1ByteIntegers(data, buf)
-	case 2:
-		return encode2ByteIntegers(data, buf)
-	case 4:
-		return encode4ByteIntegers(data, buf)
-	case 8:
-		return encode8ByteIntegers(data, buf)
+	switch v := data.(type) {
+	case []int8:
+		return putInts(v, buf, elemSize, 1, func(b []byte, x int8) {
+			b[0] = byte(x) //nolint:gosec // G115: intentional int8-to-byte for serialization
+		})
+	case []uint8:
+		if elemSize != 1 {
+			return nil, sizeMismatch(elemSize, data)
+		}
+		copy(buf, v)
+		return buf, nil
+	case []int16:
+		return putInts(v, buf, elemSize, 2, func(b []byte, x int16) {
+			binary.LittleEndian.PutUint16(b, uint16(x)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
+		})
+	case []uint16:
+		return putInts(v, buf, elemSize, 2, binary.LittleEndian.PutUint16)
+	case []int32:
+		return putInts(v, buf, elemSize, 4, func(b []byte, x int32) {
+			binary.LittleEndian.PutUint32(b, uint32(x)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
+		})
+	case []uint32:
+		return putInts(v, buf, elemSize, 4, binary.LittleEndian.PutUint32)
+	case []int64:
+		return putInts(v, buf, elemSize, 8, func(b []byte, x int64) {
+			binary.LittleEndian.PutUint64(b, uint64(x)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
+		})
+	case []uint64:
+		return putInts(v, buf, elemSize, 8, binary.LittleEndian.PutUint64)
 	default:
-		return nil, fmt.Errorf("unsupported integer size: %d", elemSize)
+		return nil, fmt.Errorf("unsupported data type: %T", data)
 	}
+}
+
+// sizeMismatch reports a slice whose element width does not match the dataset's
+// declared datatype size.
+func sizeMismatch(elemSize uint32, data interface{}) error {
+	return fmt.Errorf("datatype size %d cannot encode %T", elemSize, data)
+}
+
+// putInts serializes v into buf little-endian, width bytes per element, using
+// put to write a single element at the front of the slice it is handed.
+//
+// elemSize is the dataset's declared datatype size and must equal width: a
+// []int16 handed to an 8-byte dataset is rejected, not silently reinterpreted.
+func putInts[T any](v []T, buf []byte, elemSize, width uint32, put func([]byte, T)) ([]byte, error) {
+	if elemSize != width {
+		return nil, sizeMismatch(elemSize, v)
+	}
+	for i, val := range v {
+		put(buf[uint32(i)*width:], val)
+	}
+	return buf, nil
 }
 
 // getIntegerSliceLength returns the length of integer slice or error if type is unsupported.
@@ -1669,72 +1710,6 @@ func getIntegerSliceLength(data interface{}) (int, error) {
 	default:
 		return 0, fmt.Errorf("unsupported data type: %T", data)
 	}
-}
-
-// encode1ByteIntegers encodes []int8 or []uint8 to buffer.
-func encode1ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
-	switch v := data.(type) {
-	case []int8:
-		for i, val := range v {
-			buf[i] = byte(val) //nolint:gosec // G115: intentional int8-to-byte for serialization
-		}
-	case []uint8:
-		copy(buf, v)
-	default:
-		return nil, fmt.Errorf("expected []int8 or []uint8, got %T", data)
-	}
-	return buf, nil
-}
-
-// encode2ByteIntegers encodes []int16 or []uint16 to buffer.
-func encode2ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
-	switch v := data.(type) {
-	case []int16:
-		for i, val := range v {
-			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
-		}
-	case []uint16:
-		for i, val := range v {
-			binary.LittleEndian.PutUint16(buf[i*2:], val)
-		}
-	default:
-		return nil, fmt.Errorf("expected []int16 or []uint16, got %T", data)
-	}
-	return buf, nil
-}
-
-// encode4ByteIntegers encodes []int32 or []uint32 to buffer.
-func encode4ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
-	switch v := data.(type) {
-	case []int32:
-		for i, val := range v {
-			binary.LittleEndian.PutUint32(buf[i*4:], uint32(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
-		}
-	case []uint32:
-		for i, val := range v {
-			binary.LittleEndian.PutUint32(buf[i*4:], val)
-		}
-	default:
-		return nil, fmt.Errorf("expected []int32 or []uint32, got %T", data)
-	}
-	return buf, nil
-}
-
-// encode8ByteIntegers encodes []int64 or []uint64 to buffer.
-func encode8ByteIntegers(data interface{}, buf []byte) ([]byte, error) {
-	switch v := data.(type) {
-	case []int64:
-		for i, val := range v {
-			binary.LittleEndian.PutUint64(buf[i*8:], uint64(val)) //nolint:gosec // G115: intentional signed-to-unsigned for serialization
-		}
-	case []uint64:
-		for i, val := range v {
-			binary.LittleEndian.PutUint64(buf[i*8:], val)
-		}
-	default:
-		return nil, fmt.Errorf("expected []int64 or []uint64, got %T", data)
-	}
-	return buf, nil
 }
 
 // encodeFloatData encodes floating-point data to bytes.

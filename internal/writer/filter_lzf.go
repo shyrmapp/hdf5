@@ -1,9 +1,12 @@
 package writer
 
 import (
-	"errors"
 	"fmt"
 )
+
+// HDF5 filter label for LZF. Extracted as a constant so goconst does not flag
+// the duplicate string across source + helper tests.
+const filterLZFName = "lzf"
 
 // LZFFilter implements LZF compression (FilterID = 32000).
 // LZF is a very fast compression algorithm designed by Marc Lehmann.
@@ -32,7 +35,7 @@ func (f *LZFFilter) ID() FilterID {
 
 // Name returns the HDF5 filter name.
 func (f *LZFFilter) Name() string {
-	return "lzf"
+	return filterLZFName
 }
 
 // Apply compresses data using LZF algorithm.
@@ -54,23 +57,6 @@ func (f *LZFFilter) Apply(data []byte) ([]byte, error) {
 	}
 
 	return compressed, nil
-}
-
-// Remove decompresses LZF-compressed data.
-// Returns the original uncompressed data.
-//
-// This method reverses the Apply operation, restoring the original data.
-func (f *LZFFilter) Remove(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return data, nil
-	}
-
-	decompressed, err := lzfDecompress(data)
-	if err != nil {
-		return nil, fmt.Errorf("lzf decompression failed: %w", err)
-	}
-
-	return decompressed, nil
 }
 
 // Encode returns the filter parameters for the Pipeline message.
@@ -236,91 +222,4 @@ func appendBackref(output []byte, offset, length int) []byte {
 	}
 
 	return output
-}
-
-// lzfDecompress decompresses LZF-compressed data.
-//
-// Decoding algorithm:
-//  1. Read control byte
-//  2. If 000LLLLL: literal run of L+1 bytes
-//  3. If RRR != 111: short backref (3-8 bytes, offset from 13 bits)
-//  4. If 111: long backref (9-264 bytes, offset from 13 bits, length from next byte)
-//  5. Backrefs copy from (current_pos - offset) for specified length
-//
-//nolint:nestif // LZF decompression algorithm has inherent complexity
-func lzfDecompress(input []byte) ([]byte, error) {
-	inLen := len(input)
-	if inLen == 0 {
-		return input, nil
-	}
-
-	// Pre-allocate output buffer. LZF typically achieves 40-50% compression,
-	// so we estimate 2x the input size as a starting point.
-	output := make([]byte, 0, inLen*2)
-
-	inPos := 0
-
-	for inPos < inLen {
-		// Read control byte.
-		ctrl := input[inPos]
-		inPos++
-
-		// Check segment type based on top 3 bits.
-		if (ctrl & 0xE0) == 0 {
-			// Literal run: 000LLLLL
-			// RunLength = L + 1 (1-32 bytes).
-			runLen := int(ctrl) + 1
-
-			if inPos+runLen > inLen {
-				return nil, errors.New("lzf: truncated literal run")
-			}
-
-			output = append(output, input[inPos:inPos+runLen]...)
-			inPos += runLen
-		} else {
-			// Backreference (short or long).
-			if inPos >= inLen {
-				return nil, errors.New("lzf: truncated backreference")
-			}
-
-			// Read offset (13 bits across 2 bytes).
-			offsetHigh := int(ctrl & 0x1F) // Low 5 bits of control byte
-			offsetLow := int(input[inPos])
-			inPos++
-
-			offset := (offsetHigh << 8) | offsetLow
-			offset++ // Offset is 1-based in encoding
-
-			// Determine run length.
-			var runLen int
-			if (ctrl & 0xE0) == 0xE0 {
-				// Long backreference: 111OXXXX XXXXXXXX RRRRRRRR
-				// RunLength = R + 9 (9-264 bytes).
-				if inPos >= inLen {
-					return nil, errors.New("lzf: truncated long backreference")
-				}
-				runLen = int(input[inPos]) + 9
-				inPos++
-			} else {
-				// Short backreference: RRROXXXX XXXXXXXX
-				// RunLength = R + 2 (3-8 bytes).
-				runBits := (ctrl >> 5) & 0x07
-				runLen = int(runBits) + 2
-			}
-
-			// Validate offset.
-			if offset > len(output) {
-				return nil, fmt.Errorf("lzf: invalid offset %d (output size: %d)", offset, len(output))
-			}
-
-			// Copy from earlier position in output.
-			// Note: source and destination may overlap (for run-length encoding).
-			srcPos := len(output) - offset
-			for i := 0; i < runLen; i++ {
-				output = append(output, output[srcPos+i])
-			}
-		}
-	}
-
-	return output, nil
 }

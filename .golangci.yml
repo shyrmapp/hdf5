@@ -42,7 +42,6 @@ linters:
 
     # Performance
     - prealloc      # Find slice declarations that could be preallocated
-    - bodyclose     # Check HTTP response bodies are closed
     - makezero      # Find slice declarations with non-zero initial length
 
     # Code practices

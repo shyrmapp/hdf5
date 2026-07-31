@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- **Dead decompression path in `internal/writer`.** `Filter.Remove` (GZIP,
+  Shuffle, Fletcher32, LZF), `FilterPipeline.Remove` and a second copy of
+  `lzfDecompress`. Nothing but tests called them — reads go through
+  `internal/core.FilterPipelineMessage.ApplyFilters`. The two LZF decoders had
+  been free to drift apart. `Remove` is gone from the `Filter` interface.
+- **`internal/utils` buffer pool.** `sync.Pool` behind ~40 call sites reading 4
+  to 128 bytes, where a plain `make([]byte, n)` stack-allocates. Also removes
+  the hazard of returning a buffer to the pool while a parsed message still
+  aliased it.
+- **Unused `internal/` API**: `Allocator.{IsAllocated,Blocks,ValidateNoOverlaps,FreeBlocks}`,
+  `FileWriter.{Seek,File,WriteAtWithAllocation}`,
+  `ChunkCoordinator.{DatasetDims,ChunkDims,NumChunks}`, `FilterPipeline.Count`.
+- **`docs/guides/`** (6 files) and the per-example READMEs. They duplicated the
+  README and godoc and had gone stale (INSTALLATION.md still required Go 1.25).
+  `docs/architecture/OVERVIEW.md` stays.
+- **`scripts/pre-release-check.sh`**, which its own header described as
+  "EXACTLY matches CI checks".
+- **The Makefile.** CI never used it — it runs `go` commands directly — so it
+  was an unenforced second copy of the build commands, and three of its targets
+  pointed at files that do not exist (`examples/*.go`, `examples/example.go`,
+  `examples/comprehensive_demo.go`). Every target was a one-liner with a
+  shorter native form. CONTRIBUTING.md now gives the commands directly.
+- ~10,900 lines of coverage-driven tests (`*_coverage_test.go`,
+  `*_boost_test.go`, `api_coverage_test.go`). Whole-repo statement coverage
+  measured with `-coverpkg=./...` went 83.0% → 82.1%.
+
+### Changed
+
+- `Attribute.ReadValue` int32/int64/float32/float64 decoding and
+  `encodeFixedPointData` integer encoding are now one generic helper each
+  instead of four near-identical copies. `ReadValue` no longer needs its
+  `maintidx` suppression.
+- `internal/core` uses `math.Float32frombits`/`math.Float64frombits` instead of
+  hand-rolled `unsafe.Pointer` equivalents; `unsafe` is no longer imported.
+- `internal/core` uses `bytes.NewReader` instead of a hand-written
+  `io.ReaderAt` wrapper plus `io.NopCloser`/`io.NewSectionReader`.
+- `structures.BTreeEntry` is an alias for `structures.SymbolTableEntry`; they
+  were field-for-field identical.
+
+### Added
+
+- `internal/writer` filter tests now round-trip through the real read path
+  (`core.ParseFilterPipelineMessage` + `ApplyFilters`) rather than a
+  writer-internal inverse, so they verify writer/reader agreement.
+
+---
+
 ## [v0.16.0] - 2026-07-31
 
 ### New Features

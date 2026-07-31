@@ -23,9 +23,10 @@ const (
 	FilterLZF         FilterID = 32000 // LZF compression (PyTables/h5py)
 )
 
-// Filter interface for data transformation.
-// Filters are applied in sequence during write (e.g., Shuffle → GZIP → Fletcher32)
-// and reversed during read (Fletcher32 → GZIP → Shuffle).
+// Filter interface for data transformation on the write path.
+// Filters are applied in sequence during write (e.g., Shuffle → GZIP → Fletcher32).
+// The read path lives in internal/core.FilterPipelineMessage.ApplyFilters, which
+// decodes whatever the file declares rather than reversing an in-memory pipeline.
 type Filter interface {
 	// ID returns the HDF5 filter identifier.
 	ID() FilterID
@@ -37,17 +38,12 @@ type Filter interface {
 	// Returns transformed data.
 	Apply(data []byte) ([]byte, error)
 
-	// Remove reverses filter (decompression/verification on read path).
-	// Returns original data.
-	Remove(data []byte) ([]byte, error)
-
 	// Encode encodes filter parameters for Pipeline message.
 	// Returns: flags, cd_values (client data array).
 	Encode() (flags uint16, cdValues []uint32)
 }
 
-// FilterPipeline manages a chain of filters applied to chunk data.
-// Filters are applied in sequence on write and reversed on read.
+// FilterPipeline manages a chain of filters applied to chunk data on write.
 //
 // Example pipeline for numeric data compression:
 //  1. Shuffle (reorder bytes for better compression)
@@ -55,7 +51,6 @@ type Filter interface {
 //  3. Fletcher32 (add checksum)
 //
 // On write: data → Shuffle → GZIP → Fletcher32 → stored.
-// On read:  stored → Fletcher32 → GZIP → Shuffle → data.
 type FilterPipeline struct {
 	filters []Filter
 }
@@ -95,32 +90,9 @@ func (fp *FilterPipeline) Apply(data []byte) ([]byte, error) {
 	return result, nil
 }
 
-// Remove reverses all filters in reverse order (read path).
-// Example: Fletcher32 → GZIP → Shuffle
-//
-// Filters must be removed in reverse order to correctly restore the original data.
-func (fp *FilterPipeline) Remove(data []byte) ([]byte, error) {
-	result := data
-	// Apply in REVERSE order
-	for i := len(fp.filters) - 1; i >= 0; i-- {
-		filter := fp.filters[i]
-		var err error
-		result, err = filter.Remove(result)
-		if err != nil {
-			return nil, fmt.Errorf("filter %s remove failed: %w", filter.Name(), err)
-		}
-	}
-	return result, nil
-}
-
 // IsEmpty returns true if the pipeline has no filters.
 func (fp *FilterPipeline) IsEmpty() bool {
 	return len(fp.filters) == 0
-}
-
-// Count returns the number of filters in the pipeline.
-func (fp *FilterPipeline) Count() int {
-	return len(fp.filters)
 }
 
 // EncodePipelineMessage encodes the filter pipeline as an HDF5 Pipeline message (0x000B).

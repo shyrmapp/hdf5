@@ -290,24 +290,3 @@ func (cc *ChunkCoordinator) extractRecursive(src, dst []byte, coord []uint64, di
 		cc.extractRecursive(src, dst, coord, dim+1, newSrc, newDst, elemSize)
 	}
 }
-
-// DatasetDims returns dataset dimensions (read-only copy).
-func (cc *ChunkCoordinator) DatasetDims() []uint64 {
-	dims := make([]uint64, len(cc.datasetDims))
-	copy(dims, cc.datasetDims)
-	return dims
-}
-
-// ChunkDims returns chunk dimensions (read-only copy).
-func (cc *ChunkCoordinator) ChunkDims() []uint64 {
-	dims := make([]uint64, len(cc.chunkDims))
-	copy(dims, cc.chunkDims)
-	return dims
-}
-
-// NumChunks returns number of chunks per dimension (read-only copy).
-func (cc *ChunkCoordinator) NumChunks() []uint64 {
-	nums := make([]uint64, len(cc.numChunks))
-	copy(nums, cc.numChunks)
-	return nums
-}

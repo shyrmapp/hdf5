@@ -89,9 +89,8 @@ instances are independent. See [ROADMAP.md](ROADMAP.md).
 
 ## Documentation
 
-- [Quick Start](docs/guides/QUICKSTART.md) · [Installation](docs/guides/INSTALLATION.md) · [Reading Data](docs/guides/READING_DATA.md)
-- [Datatypes](docs/guides/DATATYPES.md) · [Troubleshooting](docs/guides/TROUBLESHOOTING.md) · [FAQ](docs/guides/FAQ.md)
-- [Architecture Overview](docs/architecture/OVERVIEW.md) · [API Reference](https://pkg.go.dev/github.com/shyrmapp/hdf5)
+- [API Reference](https://pkg.go.dev/github.com/shyrmapp/hdf5) · [Examples](examples/)
+- [Architecture Overview](docs/architecture/OVERVIEW.md) — how the format is parsed
 
 ## Development
 

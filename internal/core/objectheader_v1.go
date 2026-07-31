@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // parseV1Header parses a version 1 object header.
@@ -33,8 +31,7 @@ import (
 // Returns: (messages, name, referenceCount, error).
 func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderMessage, string, uint32, error) {
 	// Read the header prefix (16 bytes).
-	headerBuf := utils.GetBuffer(16)
-	defer utils.ReleaseBuffer(headerBuf)
+	headerBuf := make([]byte, 16)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(headerAddr)); err != nil {
@@ -209,10 +206,9 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 		}
 
 		// Read message header (8 bytes).
-		msgHeaderBuf := utils.GetBuffer(8)
+		msgHeaderBuf := make([]byte, 8)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(msgHeaderBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(msgHeaderBuf)
 			if err == io.EOF {
 				break // End of block reached
 			}
@@ -222,7 +218,6 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 		msgType := MessageType(sb.Endianness.Uint16(msgHeaderBuf[0:2]))
 		msgSize := sb.Endianness.Uint16(msgHeaderBuf[2:4])
 		// msgFlags := msgHeaderBuf[4]  // Unused for now.
-		utils.ReleaseBuffer(msgHeaderBuf)
 
 		if msgSize == 0 {
 			// Zero-size message, skip it but don't count it
@@ -236,10 +231,9 @@ func parseV1MessagesInBlock(r io.ReaderAt, start, end uint64, maxMessages uint16
 		}
 
 		// Read message data.
-		data := utils.GetBuffer(int(msgSize))
+		data := make([]byte, int(msgSize))
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+8)); err != nil {
-			utils.ReleaseBuffer(data)
 			if err == io.EOF {
 				break
 			}

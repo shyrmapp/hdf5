@@ -472,29 +472,3 @@ func TestExtractChunkData(t *testing.T) {
 }
 
 // TestChunkCoordinator_Getters tests read-only getters.
-func TestChunkCoordinator_Getters(t *testing.T) {
-	datasetDims := []uint64{10, 20, 30}
-	chunkDims := []uint64{5, 10, 15}
-
-	cc, err := NewChunkCoordinator(datasetDims, chunkDims)
-	require.NoError(t, err)
-
-	// Test DatasetDims
-	dims := cc.DatasetDims()
-	require.Equal(t, datasetDims, dims)
-	// Modify returned slice (should not affect internal state)
-	dims[0] = 999
-	require.Equal(t, uint64(10), cc.datasetDims[0])
-
-	// Test ChunkDims
-	chunks := cc.ChunkDims()
-	require.Equal(t, chunkDims, chunks)
-	chunks[0] = 999
-	require.Equal(t, uint64(5), cc.chunkDims[0])
-
-	// Test NumChunks
-	nums := cc.NumChunks()
-	require.Equal(t, []uint64{2, 2, 2}, nums)
-	nums[0] = 999
-	require.Equal(t, uint64(2), cc.numChunks[0])
-}

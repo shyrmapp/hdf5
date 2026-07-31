@@ -37,50 +37,8 @@ func (m *mockFilter) Apply(data []byte) ([]byte, error) {
 	return result, nil
 }
 
-func (m *mockFilter) Remove(data []byte) ([]byte, error) {
-	if m.shouldFail {
-		return nil, errors.New("mock filter remove failed")
-	}
-	// Reverse transformation: subtract filter ID from each byte
-	result := make([]byte, len(data))
-	for i, b := range data {
-		result[i] = b - byte(m.id)
-	}
-	return result, nil
-}
-
 func (m *mockFilter) Encode() (flags uint16, cdValues []uint32) {
 	return m.flags, m.cdValues
-}
-
-func TestNewFilterPipeline(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	require.NotNil(t, pipeline)
-	require.True(t, pipeline.IsEmpty())
-	require.Equal(t, 0, pipeline.Count())
-}
-
-func TestFilterPipeline_AddFilter(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter := &mockFilter{id: FilterGZIP, name: "test-filter"}
-
-	pipeline.AddFilter(filter)
-
-	require.False(t, pipeline.IsEmpty())
-	require.Equal(t, 1, pipeline.Count())
-}
-
-func TestFilterPipeline_AddMultipleFilters(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter1 := &mockFilter{id: FilterShuffle, name: "shuffle"}
-	filter2 := &mockFilter{id: FilterGZIP, name: "gzip"}
-	filter3 := &mockFilter{id: FilterFletcher32, name: "fletcher32"}
-
-	pipeline.AddFilter(filter1)
-	pipeline.AddFilter(filter2)
-	pipeline.AddFilter(filter3)
-
-	require.Equal(t, 3, pipeline.Count())
 }
 
 func TestFilterPipeline_AddFilterAtStart(t *testing.T) {
@@ -128,55 +86,6 @@ func TestFilterPipeline_ApplyMultipleFilters(t *testing.T) {
 	require.Equal(t, []byte{15, 25, 35}, result)
 }
 
-func TestFilterPipeline_RemoveSingleFilter(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter := &mockFilter{id: 5, name: "test"}
-	pipeline.AddFilter(filter)
-
-	data := []byte{15, 25, 35}
-	result, err := pipeline.Remove(data)
-
-	require.NoError(t, err)
-	require.Equal(t, []byte{10, 20, 30}, result)
-}
-
-func TestFilterPipeline_RemoveMultipleFilters(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter1 := &mockFilter{id: 2, name: "filter1"}
-	filter2 := &mockFilter{id: 3, name: "filter2"}
-	pipeline.AddFilter(filter1)
-	pipeline.AddFilter(filter2)
-
-	data := []byte{15, 25, 35}
-	result, err := pipeline.Remove(data)
-
-	require.NoError(t, err)
-	// Filters removed in reverse order: subtract 3, then subtract 2
-	require.Equal(t, []byte{10, 20, 30}, result)
-}
-
-func TestFilterPipeline_RoundTrip(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter1 := &mockFilter{id: 1, name: "filter1"}
-	filter2 := &mockFilter{id: 2, name: "filter2"}
-	filter3 := &mockFilter{id: 3, name: "filter3"}
-	pipeline.AddFilter(filter1)
-	pipeline.AddFilter(filter2)
-	pipeline.AddFilter(filter3)
-
-	original := []byte{10, 20, 30, 40, 50}
-
-	// Apply all filters
-	filtered, err := pipeline.Apply(original)
-	require.NoError(t, err)
-	require.NotEqual(t, original, filtered)
-
-	// Remove all filters
-	restored, err := pipeline.Remove(filtered)
-	require.NoError(t, err)
-	require.Equal(t, original, restored)
-}
-
 func TestFilterPipeline_ApplyError(t *testing.T) {
 	pipeline := NewFilterPipeline()
 	filter1 := &mockFilter{id: 1, name: "good-filter"}
@@ -189,35 +98,6 @@ func TestFilterPipeline_ApplyError(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad-filter")
-}
-
-func TestFilterPipeline_RemoveError(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter1 := &mockFilter{id: 1, name: "good-filter"}
-	filter2 := &mockFilter{id: 2, name: "bad-filter", shouldFail: true}
-	pipeline.AddFilter(filter1)
-	pipeline.AddFilter(filter2)
-
-	data := []byte{10, 20, 30}
-	_, err := pipeline.Remove(data)
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "bad-filter")
-}
-
-func TestFilterPipeline_EmptyData(t *testing.T) {
-	pipeline := NewFilterPipeline()
-	filter := &mockFilter{id: 1, name: "test"}
-	pipeline.AddFilter(filter)
-
-	data := []byte{}
-	result, err := pipeline.Apply(data)
-	require.NoError(t, err)
-	require.Equal(t, []byte{}, result)
-
-	result, err = pipeline.Remove(data)
-	require.NoError(t, err)
-	require.Equal(t, []byte{}, result)
 }
 
 func TestFilterPipeline_EncodePipelineMessage_Empty(t *testing.T) {

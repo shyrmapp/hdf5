@@ -7,31 +7,15 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
-// BTreeEntry represents a single entry in a B-tree node for symbol table indexing.
-type BTreeEntry struct {
-	LinkNameOffset uint64
-	ObjectAddress  uint64
-	CacheType      uint32
-	Reserved       uint32
-	// Cached symbol table addresses (only valid when CacheType == 1)
-	CachedBTreeAddr uint64
-	CachedHeapAddr  uint64
-	// Soft link target offset in local heap (only valid when CacheType == 2)
-	CachedSoftLinkOffset uint32
-}
-
-// IsSoftLink returns true if this entry represents a soft link.
-func (e *BTreeEntry) IsSoftLink() bool {
-	return e.CacheType == CacheTypeSoftLink
-}
+// BTreeEntry is a symbol-table B-tree entry. The on-disk record is identical
+// to a symbol table node entry, so it is the same type.
+type BTreeEntry = SymbolTableEntry
 
 // ReadBTreeEntries reads B-tree entries from a leaf node at the specified address.
 func ReadBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTreeEntry, error) {
-	buf := utils.GetBuffer(6)
-	defer utils.ReleaseBuffer(buf)
+	buf := make([]byte, 6)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(buf, int64(address)); err != nil {
@@ -49,24 +33,22 @@ func ReadBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTr
 		return nil, errors.New("non-leaf nodes not supported yet")
 	}
 
-	entryCountBuf := utils.GetBuffer(2)
+	entryCountBuf := make([]byte, 2)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(entryCountBuf, int64(address+6)); err != nil {
 		return nil, err
 	}
 	entryCount := sb.Endianness.Uint16(entryCountBuf)
-	utils.ReleaseBuffer(entryCountBuf)
 
 	var entries []BTreeEntry
 	entrySize := 24
 
 	for i := uint16(0); i < entryCount; i++ {
-		entryBuf := utils.GetBuffer(entrySize)
+		entryBuf := make([]byte, entrySize)
 		offset := address + 8 + uint64(i)*uint64(entrySize)
 
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(entryBuf, int64(offset)); err != nil {
-			utils.ReleaseBuffer(entryBuf)
 			return nil, err
 		}
 
@@ -76,8 +58,6 @@ func ReadBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) ([]BTr
 			CacheType:      sb.Endianness.Uint32(entryBuf[16:20]),
 			Reserved:       sb.Endianness.Uint32(entryBuf[20:24]),
 		})
-
-		utils.ReleaseBuffer(entryBuf)
 	}
 
 	return entries, nil

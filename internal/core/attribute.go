@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"unsafe"
+	"math"
 
 	"github.com/shyrmapp/hdf5/internal/utils"
 )
@@ -160,9 +160,38 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 	return attr, nil
 }
 
-// ReadValue reads the attribute value as the appropriate Go type.
+// decodeNumeric decodes totalElements fixed-width values from an attribute's raw
+// data using decode, which reads exactly sizeof(T) bytes. Scalars are unwrapped.
 //
-//nolint:maintidx // Complexity inherent in handling multiple HDF5 datatype classes
+// typeName only appears in the overflow error message.
+func decodeNumeric[T int32 | int64 | float32 | float64](
+	a *Attribute, totalElements uint64, isScalar bool, typeName string, decode func([]byte) T,
+) (interface{}, error) {
+	elemSize := uint64(a.Datatype.Size)
+
+	// CVE-2025-6269 fix: Check for multiplication overflow before processing.
+	totalBytes, err := utils.SafeMultiply(totalElements, elemSize)
+	if err != nil {
+		return nil, fmt.Errorf("attribute size overflow (%s): %w", typeName, err)
+	}
+
+	if totalBytes > uint64(len(a.Data)) {
+		return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
+			totalBytes, len(a.Data))
+	}
+
+	values := make([]T, totalElements)
+	for i := uint64(0); i < totalElements; i++ {
+		offset := i * elemSize
+		values[i] = decode(a.Data[offset : offset+elemSize])
+	}
+	if isScalar {
+		return values[0], nil
+	}
+	return values, nil
+}
+
+// ReadValue reads the attribute value as the appropriate Go type.
 func (a *Attribute) ReadValue() (interface{}, error) {
 	if a.Datatype == nil || a.Dataspace == nil {
 		return nil, fmt.Errorf("attribute missing datatype or dataspace")
@@ -182,97 +211,27 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 	case DatatypeFixed:
 		switch a.Datatype.Size {
 		case 4:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 4)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (int32): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]int32, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 4
+			return decodeNumeric(a, totalElements, isScalar, "int32", func(b []byte) int32 {
 				//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-				values[i] = int32(binary.LittleEndian.Uint32(a.Data[offset : offset+4]))
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
+				return int32(binary.LittleEndian.Uint32(b))
+			})
 		case 8:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 8)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (int64): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]int64, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 8
+			return decodeNumeric(a, totalElements, isScalar, "int64", func(b []byte) int64 {
 				//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-				values[i] = int64(binary.LittleEndian.Uint64(a.Data[offset : offset+8]))
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
+				return int64(binary.LittleEndian.Uint64(b))
+			})
 		}
 
 	case DatatypeFloat:
 		switch a.Datatype.Size {
 		case 4:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 4)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (float32): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]float32, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 4
-				bits := binary.LittleEndian.Uint32(a.Data[offset : offset+4])
-				values[i] = float32frombits(bits)
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
+			return decodeNumeric(a, totalElements, isScalar, "float32", func(b []byte) float32 {
+				return math.Float32frombits(binary.LittleEndian.Uint32(b))
+			})
 		case 8:
-			// CVE-2025-6269 fix: Check for multiplication overflow before processing.
-			totalBytes, err := utils.SafeMultiply(totalElements, 8)
-			if err != nil {
-				return nil, fmt.Errorf("attribute size overflow (float64): %w", err)
-			}
-
-			if totalBytes > uint64(len(a.Data)) {
-				return nil, fmt.Errorf("attribute data size mismatch: need %d bytes, have %d",
-					totalBytes, len(a.Data))
-			}
-
-			values := make([]float64, totalElements)
-			for i := uint64(0); i < totalElements; i++ {
-				offset := i * 8
-				bits := binary.LittleEndian.Uint64(a.Data[offset : offset+8])
-				values[i] = float64frombits(bits)
-			}
-			if isScalar {
-				return values[0], nil
-			}
-			return values, nil
+			return decodeNumeric(a, totalElements, isScalar, "float64", func(b []byte) float64 {
+				return math.Float64frombits(binary.LittleEndian.Uint64(b))
+			})
 		}
 
 	case DatatypeString:
@@ -448,17 +407,6 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 	}
 
 	return attributes, nil
-}
-
-// Helper functions for float conversion (copied from dataset_reader.go to avoid circular import).
-func float32frombits(b uint32) float32 {
-	//nolint:gosec // G103: unsafe.Pointer required for IEEE 754 float32 bit representation
-	return *(*float32)(unsafe.Pointer(&b))
-}
-
-func float64frombits(b uint64) float64 {
-	//nolint:gosec // G103: unsafe.Pointer required for IEEE 754 float64 bit representation
-	return *(*float64)(unsafe.Pointer(&b))
 }
 
 // readDenseAttributes reads attributes from dense storage (fractal heap + B-tree v2).

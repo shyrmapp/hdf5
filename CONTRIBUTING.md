@@ -138,31 +138,24 @@ chore: update golangci-lint configuration
 
 ### Before Committing
 
-1. **Format code**:
-   ```bash
-   make fmt
-   ```
+```bash
+gofmt -w -s .                      # format
+test -z "$(gofmt -l .)"            # ...and verify nothing is left unformatted
+golangci-lint run                  # lint
+go test ./...                      # build every package and run tests
+```
 
-2. **Run linter**:
-   ```bash
-   make lint
-   ```
+As a single pre-push gate:
 
-3. **Run tests**:
-   ```bash
-   make test
-   ```
-
-4. **All-in-one**:
-   ```bash
-   make pre-commit
-   ```
+```bash
+test -z "$(gofmt -l .)" && golangci-lint run && go test ./...
+```
 
 ### Pull Request Requirements
 
-- [ ] Code is formatted (`make fmt`)
-- [ ] Linter passes (`make lint`)
-- [ ] All tests pass (`make test`)
+- [ ] Code is formatted (`gofmt -l .` prints nothing)
+- [ ] Linter passes (`golangci-lint run`)
+- [ ] All tests pass (`go test ./...`)
 - [ ] New code has tests (minimum 70% coverage)
 - [ ] Documentation updated (if applicable)
 - [ ] Commit messages follow conventions
@@ -172,44 +165,25 @@ chore: update golangci-lint configuration
 
 ### Prerequisites
 
-- Go 1.25 or later
-- golangci-lint
-- Python 3 with h5py and numpy (for test file generation)
-
-### Install Dependencies
+- Go 1.26 or later
+- golangci-lint (see [installation](https://golangci-lint.run/welcome/install/))
+- Python 3 with h5py and numpy (optional, for test file generation)
 
 ```bash
-# Install golangci-lint
-make install-lint
-
-# Install Python dependencies (optional, for test files)
 pip install h5py numpy
 ```
 
 ### Running Tests
 
 ```bash
-# Run all tests
-make test
+go test ./...                                  # all tests
+go test -race ./...                            # with race detector
+go test -bench=. -benchmem ./...               # benchmarks
 
-# Run with coverage
-make test-coverage
-
-# Run with race detector
-make test-race
-
-# Run benchmarks
-make benchmark
-```
-
-### Running Linter
-
-```bash
-# Run linter
-make lint
-
-# Save linter report
-make lint-report
+# Coverage. Use -coverpkg=./... for a whole-repo number: without it each
+# package is only credited for its own tests, which undercounts internal/.
+go test -coverpkg=./... -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
 ```
 
 ## Project Structure
@@ -217,15 +191,14 @@ make lint-report
 ```
 hdf5/
 ├── .golangci.yml         # Linter configuration
-├── Makefile              # Development commands
 ├── cmd/                  # Command-line utilities
 ├── docs/                 # Documentation
 ├── examples/             # Usage examples
 ├── internal/             # Internal implementation
 │   ├── core/            # Core HDF5 structures
 │   ├── structures/      # HDF5 data structures
-│   ├── testing/         # Test utilities
-│   └── utils/           # Utility functions
+│   ├── writer/          # File writing, allocation, filters
+│   └── utils/           # Overflow-checked arithmetic, size limits
 ├── testdata/            # Test HDF5 files
 ├── file.go              # Public API - File operations
 ├── group.go             # Public API - Groups & Datasets
@@ -239,7 +212,7 @@ hdf5/
 3. Create feature branch from `main`
 4. Implement feature with tests
 5. Update documentation
-6. Run quality checks (`make pre-commit`)
+6. Run quality checks (`test -z "$(gofmt -l .)" && golangci-lint run && go test ./...`)
 7. Create pull request to `main`
 8. Wait for CI green and code review
 9. Address feedback

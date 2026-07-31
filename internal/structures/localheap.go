@@ -45,8 +45,7 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 	//         FreeListOffset(lengthSize) + DataSegmentAddress(offsetSize)
 	headerSize := 8 + int(sb.LengthSize)*2 + int(sb.OffsetSize)
 
-	headerBuf := utils.GetBuffer(headerSize)
-	defer utils.ReleaseBuffer(headerBuf)
+	headerBuf := make([]byte, headerSize)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(headerBuf, int64(address)); err != nil {

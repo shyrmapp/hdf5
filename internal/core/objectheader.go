@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // ObjectType identifies the type of HDF5 object (group, dataset, datatype).
@@ -78,8 +76,7 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 		return nil, fmt.Errorf("negative offset: %d", offset)
 	}
 
-	prefix := utils.GetBuffer(8)
-	defer utils.ReleaseBuffer(prefix)
+	prefix := make([]byte, 8)
 
 	if _, err := r.ReadAt(prefix, offset); err != nil {
 		return nil, fmt.Errorf("object header read failed: %w", err)
@@ -219,8 +216,7 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	chunkSizeBytes := 1 << sizeFieldType // 1, 2, 4, or 8
 
 	// Read chunk size
-	sizeBuf := utils.GetBuffer(chunkSizeBytes)
-	defer utils.ReleaseBuffer(sizeBuf)
+	sizeBuf := make([]byte, chunkSizeBytes)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(sizeBuf, int64(current)); err != nil {
@@ -268,10 +264,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 
 	for current < end {
 		// Always read 6 bytes - enough for either 4-byte or 6-byte header
-		headerBuf := utils.GetBuffer(6)
+		headerBuf := make([]byte, 6)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(headerBuf)
 			return nil, "", fmt.Errorf("message header read failed: %w", err)
 		}
 
@@ -287,17 +282,15 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 		msgFlags := headerBuf[3]
 		_ = msgFlags // Unused for now
 		// Creation index at headerBuf[4:6] if tracked - not currently used
-		utils.ReleaseBuffer(headerBuf)
 
 		if msgSize == 0 {
 			current += msgHeaderSize
 			continue
 		}
 
-		data := utils.GetBuffer(int(msgSize))
+		data := make([]byte, int(msgSize))
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
-			utils.ReleaseBuffer(data)
 			return nil, "", fmt.Errorf("message data read failed: %w", err)
 		}
 
@@ -361,8 +354,7 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	}
 
 	// Read signature.
-	sigBuf := utils.GetBuffer(4)
-	defer utils.ReleaseBuffer(sigBuf)
+	sigBuf := make([]byte, 4)
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(sigBuf, int64(blockAddr)); err != nil {
@@ -387,10 +379,9 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	current := msgStart
 
 	for current < msgEnd {
-		headerBuf := utils.GetBuffer(6)
+		headerBuf := make([]byte, 6)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(headerBuf, int64(current)); err != nil {
-			utils.ReleaseBuffer(headerBuf)
 			return nil, "", fmt.Errorf("OCHK message header read failed: %w", err)
 		}
 
@@ -401,17 +392,15 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 		} else {
 			msgSize = binary.LittleEndian.Uint16(headerBuf[1:3])
 		}
-		utils.ReleaseBuffer(headerBuf)
 
 		if msgSize == 0 {
 			current += msgHeaderSize
 			continue
 		}
 
-		data := utils.GetBuffer(int(msgSize))
+		data := make([]byte, int(msgSize))
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 		if _, err := r.ReadAt(data, int64(current+msgHeaderSize)); err != nil {
-			utils.ReleaseBuffer(data)
 			return nil, "", fmt.Errorf("OCHK message data read failed: %w", err)
 		}
 

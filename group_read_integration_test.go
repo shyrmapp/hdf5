@@ -271,6 +271,17 @@ func TestReadCompound_MixedTypes(t *testing.T) {
 // NamedDatatype tests
 // ---------------------------------------------------------------------------
 
+// TestNamedDatatypeAccessor covers NamedDatatype.Datatype(). The reference files
+// contain no committed datatype, so the accessor is checked against a value
+// built here rather than parsed from disk.
+func TestNamedDatatypeAccessor(t *testing.T) {
+	dt := &core.DatatypeMessage{Class: core.DatatypeFixed, Version: 1, Size: 4}
+	nd := &NamedDatatype{name: "temperature_t", datatype: dt}
+
+	require.Equal(t, "temperature_t", nd.Name())
+	require.Same(t, dt, nd.Datatype())
+}
+
 // TestNamedDatatype_Accessor reads a file containing a named datatype and verifies the accessor.
 func TestNamedDatatype_Accessor(t *testing.T) {
 	// The official reference file memleak_H5O_dtype_decode_helper_H5Odtype.h5
