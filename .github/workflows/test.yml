@@ -3,7 +3,7 @@ name: Tests
 # Testing Strategy:
 # - Tests run on Linux, macOS, and Windows (cross-platform library)
 # - HDF5 is a cross-platform file format - must work everywhere
-# - Go 1.25+ required (matches go.mod requirement)
+# - Go 1.26+ required (matches go.mod requirement)
 #
 # Branch Strategy (GitHub Flow):
 # - feature/** branches: Development work
@@ -28,7 +28,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.25']  # Match go.mod requirement
+        go-version: ['1.26']  # Match go.mod requirement
 
     steps:
     - name: Checkout code
@@ -54,16 +54,6 @@ jobs:
       shell: bash
       run: go test -short -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
-    - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
-      uses: codecov/codecov-action@v7
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        files: ./coverage.txt
-        flags: unittests
-        name: codecov-unit
-        fail_ci_if_error: false
-        verbose: true
 
   # C-library interop - Go-written files validated with official HDF5 tools
   c-interop:
@@ -77,7 +67,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Install HDF5 tools
@@ -85,6 +75,24 @@ jobs:
 
     - name: Run C interop tests
       run: go test -v -run TestCInterop .
+
+  # Short fuzz pass over the untrusted-input read surface
+  fuzz:
+    name: Fuzz (smoke)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: '1.26'
+        cache: true
+
+    - name: Fuzz FuzzRead
+      run: go test -run '^$' -fuzz FuzzRead -fuzztime 90s .
 
   lint:
     name: Lint
@@ -98,7 +106,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Run golangci-lint
@@ -119,7 +127,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Check formatting

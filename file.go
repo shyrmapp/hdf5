@@ -19,6 +19,7 @@ type File struct {
 	sb            *core.Superblock
 	root          *Group
 	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
+	loadingGroups map[uint64]bool // Groups on the current load path (hard-link cycle guard)
 }
 
 // Open opens an HDF5 file for reading and returns a File handle.
@@ -54,6 +55,7 @@ func Open(filename string) (*File, error) {
 		osFile:        f,
 		sb:            sb,
 		visitedBTrees: make(map[uint64]bool),
+		loadingGroups: make(map[uint64]bool),
 	}
 
 	// Validate root group address.

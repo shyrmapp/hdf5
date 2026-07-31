@@ -91,7 +91,12 @@ func LoadLocalHeap(r io.ReaderAt, address uint64, sb *core.Superblock) (*LocalHe
 		HeaderSize: uint64(headerSize),
 	}
 
-	// Allocate and read data segment from the ACTUAL address in the header
+	// Allocate and read data segment from the ACTUAL address in the header.
+	// The size is attacker-controlled; cap it before allocating (local heaps
+	// hold link names — MaxStringSize is generous).
+	if err := utils.ValidateBufferSize(dataSegmentSize, utils.MaxStringSize, "local heap data segment"); err != nil {
+		return nil, err
+	}
 	heap.Data = make([]byte, dataSegmentSize)
 	if _, err := r.ReadAt(heap.Data, int64(dataSegmentAddr)); err != nil {
 		return nil, fmt.Errorf("local heap data read failed: %w", err)

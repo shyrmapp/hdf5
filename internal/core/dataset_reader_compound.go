@@ -131,6 +131,10 @@ func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements u
 
 		// Parse each member.
 		for _, member := range compoundType.Members {
+			if uint64(member.Offset) > structSize {
+				return nil, fmt.Errorf("member %s offset %d exceeds compound size %d",
+					member.Name, member.Offset, structSize)
+			}
 			memberData := structData[member.Offset:]
 
 			memberValue, err := parseMemberValue(memberData, member.Type, r, sb)
