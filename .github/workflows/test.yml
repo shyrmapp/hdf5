@@ -1,16 +1,10 @@
 name: Tests
 
-# Testing Strategy:
-# - Tests run on Linux, macOS, and Windows (cross-platform library)
-# - HDF5 is a cross-platform file format - must work everywhere
-# - Go 1.26+ required (matches go.mod requirement)
+# HDF5 is a cross-platform file format, so the unit tests run on Linux, macOS
+# and Windows. The interop, fuzz and lint jobs are platform-independent and
+# run on Linux only.
 #
-# Branch Strategy (GitHub Flow):
-# - feature/** branches: Development work
-# - fix/** branches: Bug fixes
-# - release/** branches: Pre-release testing
-# - main branch: Production-ready code only (protected)
-# - Pull requests: Must pass all tests before merge (--squash)
+# The Go version comes from go.mod (go-version-file) so it cannot drift.
 
 on:
   push:
@@ -21,14 +15,12 @@ on:
       - main
 
 jobs:
-  # Unit tests - Cross-platform
   unit-tests:
-    name: Unit Tests - ${{ matrix.os }} - Go ${{ matrix.go-version }}
+    name: Unit Tests - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.26']  # Match go.mod requirement
 
     steps:
     - name: Checkout code
@@ -37,11 +29,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version-file: go.mod
         cache: true
-
-    - name: Download dependencies
-      run: go mod download
 
     - name: Verify dependencies
       run: go mod verify
@@ -52,8 +41,7 @@ jobs:
 
     - name: Run unit tests with race detector
       shell: bash
-      run: go test -short -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-
+      run: go test -race ./...
 
   # C-library interop - Go-written files validated with official HDF5 tools
   c-interop:
@@ -67,7 +55,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version-file: go.mod
         cache: true
 
     - name: Install HDF5 tools
@@ -88,7 +76,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version-file: go.mod
         cache: true
 
     - name: Fuzz FuzzRead
@@ -97,7 +85,6 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    continue-on-error: false  # Strict for production library
 
     steps:
     - name: Checkout code
@@ -106,37 +93,23 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v7
       with:
-        go-version: '1.26'
+        go-version-file: go.mod
         cache: true
+
+    # golangci-lint does not gate formatting: its formatters only run under
+    # `golangci-lint fmt`, which prints a diff but always exits 0.
+    - name: Check formatting
+      run: |
+        if [ -n "$(gofmt -l .)" ]; then
+          echo "ERROR: The following files are not formatted:"
+          gofmt -l .
+          echo "Run 'gofmt -w -s .' to fix."
+          exit 1
+        fi
+        echo "All files are properly formatted"
 
     - name: Run golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
         version: latest
         args: --timeout=5m
-
-  # Formatting check
-  formatting:
-    name: Code Formatting
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-
-    - name: Set up Go
-      uses: actions/setup-go@v7
-      with:
-        go-version: '1.26'
-        cache: true
-
-    - name: Check formatting
-      run: |
-        if [ -n "$(gofmt -l .)" ]; then
-          echo "ERROR: The following files are not formatted:"
-          gofmt -l .
-          echo ""
-          echo "Run 'go fmt ./...' to fix formatting issues."
-          exit 1
-        fi
-        echo "All files are properly formatted ✓"

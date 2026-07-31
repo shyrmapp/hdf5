@@ -84,17 +84,17 @@ This is a **Pure Go implementation**, not a CGo wrapper or line-by-line port.
 |---------------------|-----------|------------|-------|
 | Superblock v0,v2,v3 | ✅        | ✅         | Full support |
 | Object Header v1,v2 | ✅        | ✅         | With continuations |
-| All Datatypes       | ✅        | ✅         | Including FP8, bfloat16 |
+| All Datatypes       | ✅        | ⚠️         | float16/32/64, complex; no FP8/bfloat16 |
 | Bitfield Datatype   | ✅        | ❌         | Not supported (explicit rejection) |
 | Chunked + Filters   | ✅        | ✅         | GZIP, Shuffle, Fletcher32, LZF |
 | BZIP2 Filter        | ✅        | ⚠️         | Read only (stdlib) |
 | Scale-Offset Filter | ✅        | ❌         | Not implemented |
 | Dense Attributes    | ✅        | ✅         | Fractal heap + B-tree v2 |
 | Soft/External Links | ✅        | ✅         | Full support |
-| SWMR Mode           | ✅        | ❌         | Planned v0.14.0+ |
-| Parallel I/O (MPI)  | ✅        | ❌         | Planned v0.14.0+ |
-| SZIP Compression    | ✅        | ❌         | Stub only (requires libaec) |
-| Virtual Datasets    | ✅        | ❌         | Planned v0.14.0+ |
+| SWMR Mode           | ✅        | ❌         | Not planned (see ROADMAP.md) |
+| Parallel I/O (MPI)  | ✅        | ❌         | Not planned (see ROADMAP.md) |
+| SZIP Compression    | ✅        | ⚠️         | Read only, via shyrmapp/aec (v0.16) |
+| Virtual Datasets    | ✅        | ❌         | Not planned (see ROADMAP.md) |
 
 ## Sync Workflow
 
