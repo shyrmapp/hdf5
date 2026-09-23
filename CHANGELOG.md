@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Performance
+
+- **Chunked hyperslab reads copy rows, not elements.** `extractChunkPortion`
+  walked the whole selection for every chunk it visited and tested each
+  element for membership, so reading a many-chunk dataset in bands was
+  quadratic in the chunk count. It now visits only the chunk∩selection box
+  and moves each contiguous innermost run with one `copy()`. Output is
+  unchanged (randomised comparison against the old per-element path and the
+  contiguous extractor, every element width, strided and blocked selections,
+  edge chunks, short buffers). Placing one 512-row band of a 2200×1900
+  float64 dataset in 69×119 chunks: 130 ms → 0.27 ms; `ReadSlice` in row
+  bands over a 1100×950 dataset in the same chunks: 59 ms → 3.5 ms.
+
+---
+
 ## [v0.17.0] - 2026-07-31
 
 ### Security
@@ -19,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well-formed the zlib framing looks. `ApplyFilters` now takes that size and
   enforces it during decompression, for deflate, bzip2 and LZF.
 
-  This is a tighter bound than the decompression *ratio* limit SECURITY.md
+  This is a tighter bound than the decompression _ratio_ limit SECURITY.md
   previously (and falsely) claimed: it comes from the file's own declared
   geometry rather than a guessed multiplier, so it needs no tuning and has no
   false positives on legitimately well-compressing data.
