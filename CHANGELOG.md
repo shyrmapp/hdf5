@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [v0.17.1] - 2026-09-23
+
 ### Performance
 
 - **Chunked hyperslab reads copy rows, not elements.** `extractChunkPortion`
