@@ -851,8 +851,20 @@ func (d *Dataset) extractFromChunk(
 	return nil
 }
 
-// extractChunkPortion extracts the portion of a chunk that intersects with the selection.
-// This is the complex part - determining which elements from this chunk are in the selection.
+// extractChunkPortion copies the part of one decoded chunk that intersects
+// the selection into outputData.
+//
+// Each element lands at its row-major position within the selection's
+// output (see selectionOutputIndex), not at a running counter: chunks are
+// visited in chunk-grid order, which is not the selection's order whenever a
+// chunk is narrower than the selection, and a missing sparse chunk would
+// otherwise shift every later element.
+//
+// Only the chunk∩selection box is visited — per dimension, just the selected
+// coordinates inside [chunkStart, chunkEnd) — and each contiguous run along
+// the innermost dimension is moved with one copy(). The previous version
+// walked the whole selection for every chunk and tested each element for
+// membership, which made a banded read of a many-chunk dataset quadratic.
 func extractChunkPortion(
 	chunkData []byte,
 	chunkCoord []uint64,
@@ -863,36 +875,142 @@ func extractChunkPortion(
 	outputData []byte,
 ) {
 	ndims := len(chunkCoord)
-
-	// Calculate chunk's position in dataset
-	chunkStart := make([]uint64, ndims)
-	chunkEnd := make([]uint64, ndims)
+	if ndims == 0 {
+		return
+	}
 	for i := 0; i < ndims; i++ {
-		chunkStart[i] = chunkCoord[i] * chunkDims[i]
-		chunkEnd[i] = chunkStart[i] + chunkDims[i]
-		if chunkEnd[i] > datasetDims[i] {
-			chunkEnd[i] = datasetDims[i]
+		if selection.Count[i] == 0 {
+			return
 		}
 	}
 
-	// Iterate through selection and copy elements that are in this chunk
-	coords := make([]uint64, ndims)
-	copy(coords, selection.Start)
+	c := chunkCopy{
+		chunkData:   chunkData,
+		outputData:  outputData,
+		sel:         selection,
+		elementSize: elementSize,
+		chunkStart:  make([]uint64, ndims),
+		chunkEnd:    make([]uint64, ndims),
+		srcStride:   make([]uint64, ndims),
+		dstStride:   make([]uint64, ndims),
+	}
+	src, dst := uint64(1), uint64(1)
+	for i := ndims - 1; i >= 0; i-- {
+		c.chunkStart[i] = chunkCoord[i] * chunkDims[i]
+		c.chunkEnd[i] = c.chunkStart[i] + chunkDims[i]
+		if c.chunkEnd[i] > datasetDims[i] {
+			c.chunkEnd[i] = datasetDims[i]
+		}
+		c.srcStride[i] = src
+		c.dstStride[i] = dst
+		src *= chunkDims[i]
+		dst *= selection.Count[i] * selection.Block[i]
+	}
+	c.copyDim(0, 0, 0)
+}
 
-	extractChunkPortionRecursive(
-		chunkData, chunkStart, chunkEnd, chunkDims,
-		selection, coords, 0,
-		elementSize, outputData,
-	)
+// chunkCopy carries the per-chunk state of extractChunkPortion. Offsets are
+// in elements; srcStride is the chunk's row-major stride per dimension and
+// dstStride the selection output's.
+type chunkCopy struct {
+	chunkData, outputData []byte
+	sel                   *HyperslabSelection
+	elementSize           uint64
+	chunkStart, chunkEnd  []uint64
+	srcStride, dstStride  []uint64
+}
+
+// copyDim visits the selected coordinates of dimension dim that fall inside
+// the chunk, recursing into the next dimension or, at the innermost one,
+// copying runs. srcBase/dstBase are the element offsets accumulated from the
+// outer dimensions.
+//
+// A coordinate x maps to output position (rel/stride)*block + rel%stride
+// with rel = x - start, or plain rel when stride <= 1 — the same mapping as
+// selectionOutputIndex. Within one block of a non-overlapping selection
+// (block <= stride) that is consecutive, so a block's intersection with the
+// chunk is one run; with stride <= 1 the whole selected range is. Blocks
+// that overlap (block > stride, not a valid HDF5 selection but not rejected
+// either) keep the per-element mapping.
+func (c *chunkCopy) copyDim(dim int, srcBase, dstBase uint64) {
+	sel := c.sel
+	lo, hi := c.chunkStart[dim], c.chunkEnd[dim]
+	start, count, stride, block := sel.Start[dim], sel.Count[dim], sel.Stride[dim], sel.Block[dim]
+	innermost := dim == len(c.chunkStart)-1
+
+	// visit handles the chunk-local coordinate range [a, b) of this
+	// dimension whose output positions start at pos and are consecutive.
+	visit := func(a, b, pos uint64) {
+		src := srcBase + (a-lo)*c.srcStride[dim]
+		dst := dstBase + pos*c.dstStride[dim]
+		if innermost {
+			c.copyRun(src, dst, b-a)
+			return
+		}
+		for x := a; x < b; x++ {
+			c.copyDim(dim+1, src, dst)
+			src += c.srcStride[dim]
+			dst += c.dstStride[dim]
+		}
+	}
+
+	if stride <= 1 {
+		end := start + (count-1)*stride + block
+		a, b := max(lo, start), min(hi, end)
+		if a < b {
+			visit(a, b, a-start)
+		}
+		return
+	}
+
+	// First block that can reach lo: start + c*stride + block > lo.
+	c0 := uint64(0)
+	if lo >= start+block {
+		c0 = (lo - start - block + stride) / stride
+	}
+	for ci := c0; ci < count; ci++ {
+		bs := start + ci*stride
+		if bs >= hi {
+			break
+		}
+		a, b := max(lo, bs), min(hi, bs+block)
+		if a >= b {
+			continue
+		}
+		if block <= stride {
+			visit(a, b, ci*block+(a-bs))
+			continue
+		}
+		for x := a; x < b; x++ {
+			rel := x - start
+			visit(x, x+1, (rel/stride)*block+rel%stride)
+		}
+	}
+}
+
+// copyRun copies n consecutive elements from chunk offset src to output
+// offset dst. Like the per-element copy it replaces, elements that would
+// fall outside either buffer (a short chunk, a clipped edge) are dropped
+// rather than read or written out of bounds; since both offsets grow
+// together, the ones that fit are a prefix of the run.
+func (c *chunkCopy) copyRun(src, dst, n uint64) {
+	es := c.elementSize
+	if es == 0 || n == 0 {
+		return
+	}
+	srcLen, dstLen := uint64(len(c.chunkData)), uint64(len(c.outputData))
+	if src*es >= srcLen || dst*es >= dstLen {
+		return
+	}
+	n = min(n, (srcLen-src*es)/es, (dstLen-dst*es)/es)
+	copy(c.outputData[dst*es:(dst+n)*es], c.chunkData[src*es:(src+n)*es])
 }
 
 // selectionOutputIndex returns the row-major position of a dataset
-// coordinate within the hyperslab selection's output buffer. This decouples
-// an element's output slot from the order chunks happen to be visited, so a
-// selection that spans multiple chunks (or skips a missing sparse chunk)
-// still lands every element in its correct place. The per-dimension output
-// extent is Count*Block; for the common stride=1, block=1 ReadSlice this is
-// simply coord-start.
+// coordinate within the hyperslab selection's output buffer. The per-dimension
+// output extent is Count*Block; for the common stride=1, block=1 ReadSlice
+// this is simply coord-start. extractChunkPortion applies the same mapping
+// per run; this per-coordinate form is kept as its reference.
 func selectionOutputIndex(coords []uint64, sel *HyperslabSelection) uint64 {
 	idx := uint64(0)
 	stride := uint64(1)
@@ -908,81 +1026,6 @@ func selectionOutputIndex(coords []uint64, sel *HyperslabSelection) uint64 {
 		stride *= sel.Count[i] * sel.Block[i]
 	}
 	return idx
-}
-
-// extractChunkPortionRecursive recursively extracts elements from chunk.
-//
-//nolint:gocognit // Complex recursive algorithm for N-dimensional chunk extraction
-func extractChunkPortionRecursive(
-	chunkData []byte,
-	chunkStart, chunkEnd []uint64,
-	chunkDims []uint64,
-	selection *HyperslabSelection,
-	coords []uint64,
-	dim int,
-	elementSize uint64,
-	outputData []byte,
-) {
-	ndims := len(coords)
-
-	if dim == ndims {
-		// Base case: check if this coordinate is in the current chunk
-		inChunk := true
-		for i := 0; i < ndims; i++ {
-			if coords[i] < chunkStart[i] || coords[i] >= chunkEnd[i] {
-				inChunk = false
-				break
-			}
-		}
-
-		if !inChunk {
-			return
-		}
-
-		// Calculate offset within chunk (relative to chunk start)
-		chunkOffset := uint64(0)
-		chunkStride := uint64(1)
-		for i := ndims - 1; i >= 0; i-- {
-			relCoord := coords[i] - chunkStart[i]
-			chunkOffset += relCoord * chunkStride
-			chunkStride *= chunkDims[i]
-		}
-
-		// Copy element from chunk to its coordinate-derived output slot.
-		// Using the row-major position within the selection (not a running
-		// counter) keeps the output correct regardless of chunk visitation
-		// order or missing sparse chunks.
-		srcOffset := chunkOffset * elementSize
-		dstOffset := selectionOutputIndex(coords, selection) * elementSize
-
-		if srcOffset+elementSize <= uint64(len(chunkData)) &&
-			dstOffset+elementSize <= uint64(len(outputData)) {
-			copy(outputData[dstOffset:dstOffset+elementSize],
-				chunkData[srcOffset:srcOffset+elementSize])
-		}
-
-		return
-	}
-
-	// Recursive case: iterate through selection in this dimension
-	for c := uint64(0); c < selection.Count[dim]; c++ {
-		blockStart := selection.Start[dim] + c*selection.Stride[dim]
-
-		for b := uint64(0); b < selection.Block[dim]; b++ {
-			coords[dim] = blockStart + b
-
-			if coords[dim] >= chunkEnd[dim] {
-				// Beyond this chunk, skip rest of this dimension
-				return
-			}
-
-			extractChunkPortionRecursive(
-				chunkData, chunkStart, chunkEnd, chunkDims,
-				selection, coords, dim+1,
-				elementSize, outputData,
-			)
-		}
-	}
 }
 
 // extractHyperslabFromRawData extracts a hyperslab selection from raw dataset bytes.
