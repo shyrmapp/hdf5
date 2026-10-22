@@ -185,14 +185,3 @@ func TestAttributeInfoMessage_Validation(t *testing.T) {
 		})
 	}
 }
-
-// TestReadDenseAttributes_EmptyResult tests when no attributes found.
-// Note: This would require mocking B-tree v2 and fractal heap structures.
-func TestReadDenseAttributes_EmptyResult(t *testing.T) {
-	t.Skip("requires complex B-tree v2 and fractal heap mocking")
-
-	// Future implementation would create:
-	// - Valid B-tree v2 header with numRecords = 0
-	// - Valid fractal heap header
-	// - Expect empty attribute array (not error)
-}

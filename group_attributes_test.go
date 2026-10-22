@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -115,10 +116,7 @@ func TestGroupWriter_WriteAttribute_MATLAB(t *testing.T) {
 
 // TestGroupWriter_WriteAttribute_NestedGroups tests attributes on nested groups.
 func TestGroupWriter_WriteAttribute_NestedGroups(t *testing.T) {
-	t.Skip("Skipping nested groups test - known limitation with reading nested groups structure")
-
-	testFile := "test_group_attribute_nested.h5"
-	defer func() { _ = os.Remove(testFile) }()
+	testFile := filepath.Join(t.TempDir(), "test_group_attribute_nested.h5")
 
 	fw, err := CreateForWrite(testFile, CreateTruncate)
 	require.NoError(t, err)

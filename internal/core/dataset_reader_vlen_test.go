@@ -1,34 +1,10 @@
 package core
 
 import (
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestReadVariableLengthStrings(t *testing.T) {
-	// Open test file with vlen strings in compound type
-	filename := "../../testdata/vlen_strings.h5"
-	file, err := os.Open(filename)
-	require.NoError(t, err, "failed to open test file")
-	defer func() { _ = file.Close() }()
-
-	// Read superblock
-	sb, err := ReadSuperblock(file)
-	require.NoError(t, err, "failed to read superblock")
-
-	// Find root group
-	rootHeader, err := ReadObjectHeader(file, sb.RootGroup, sb)
-	require.NoError(t, err, "failed to read root group header")
-
-	// For now, this is a placeholder test
-	// Full integration requires proper group traversal which is complex
-	// We'll test the Global Heap functions separately
-	_ = rootHeader
-
-	t.Skip("Full integration test pending - needs dataset lookup through group links")
-}
 
 func TestGlobalHeapReference(t *testing.T) {
 	tests := []struct {
@@ -92,10 +68,4 @@ func TestGlobalHeapReference(t *testing.T) {
 			require.Equal(t, tt.wantIndex, ref.ObjectIndex, "object index mismatch")
 		})
 	}
-}
-
-func TestGlobalHeapCollection(t *testing.T) {
-	// This test would require a real HDF5 file with global heap
-	// For now, we test the parsing logic separately
-	t.Skip("Integration test - requires real HDF5 file with global heap")
 }

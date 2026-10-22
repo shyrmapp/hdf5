@@ -304,14 +304,6 @@ func TestValidateSoftLinkTargetPath(t *testing.T) {
 	}
 }
 
-// TestResolveSoftLink_NotImplemented tests that resolution is not yet implemented.
-// MVP v0.11.5-beta: Soft link resolution will be added in v0.12.0.
-func TestResolveSoftLink_NotImplemented(t *testing.T) {
-	// Soft link resolution is not implemented in MVP v0.11.5-beta
-	// This test documents the planned API for v0.12.0
-	t.Skip("Soft link resolution not implemented in MVP v0.11.5-beta (planned for v0.12.0)")
-}
-
 // Future tests (skipped in MVP v0.11.5-beta):
 // - TestResolveSoftLink_Simple
 // - TestResolveSoftLink_Chain

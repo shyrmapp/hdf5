@@ -8,13 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestReadDatasetStrings_MockData tests ReadDatasetStrings with synthetic data.
-func TestReadDatasetStrings_MockData(t *testing.T) {
-	// Skip this test - creating valid HDF5 message structures is complex
-	// The convertToStrings function is tested directly instead
-	t.Skip("Requires complex HDF5 message structure - test convertToStrings directly instead")
-}
-
 // TestReadDatasetStrings_ErrorCases tests error handling.
 func TestReadDatasetStrings_ErrorCases(t *testing.T) {
 	tests := []struct {
@@ -138,13 +131,6 @@ func TestReadDatasetStrings_EmptyDataset(t *testing.T) {
 	data, err := ReadDatasetStrings(emptyFile, header, sb, 0)
 	require.NoError(t, err)
 	require.Empty(t, data)
-}
-
-// TestConvertToStrings_VariableLength tests variable-length string error directly.
-func TestConvertToStrings_VariableLength(t *testing.T) {
-	// Skip this test - IsVariableString logic may not be straightforward to mock
-	// Variable-length string support is tested via integration tests
-	t.Skip("Variable-length string detection requires proper datatype message parsing")
 }
 
 // Helper functions
