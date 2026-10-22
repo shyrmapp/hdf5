@@ -41,8 +41,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offsets counted from the block start, and unused heap addresses are written
   as undefined rather than 0.
 
+- **Fill values.** Fill value messages (types 4 and 5) are parsed and missing
+  chunks, unallocated contiguous storage and never-written datasets read as the
+  fill value instead of 0 or a "negative offset" error. netCDF-4 variables that
+  were never written now return `NC_FILL`.
+- **Contiguous `ReadSlice`/`ReadHyperslab` return the right data.** The fast
+  path treated any selection with a full last dimension as one linear run, so
+  multi-dimensional partial selections and strided selections returned wrong
+  elements. `ReadSlice` bounds checks no longer overflow.
+- **`WithMaxReadBytes` is checked before allocating** in `ReadSlice` and
+  `ChunkIterator`, so a tiny file declaring huge dimensions errors instead of
+  allocating gigabytes first.
+- **`Attribute.ReadValue`** honours byte order and signedness and supports
+  1- and 2-byte integers.
+- **Superblock v2/v3** sizes are decoded per spec; files with 4-byte offsets
+  open. Superblock v0 root entry offsets follow the file's offset size.
+- **Malformed files fail with an error instead of killing the process:**
+  self-referencing B-tree nodes and object header continuation chains, oversized
+  global heap collections and objects, link name lengths, short dataspace
+  messages, LZF padding and chunk-index preallocation are all bounded.
+  Object header and chunk-index checksums are verified.
+- **More real files open:** filter pipeline message v2, paged fixed-array chunk
+  indexes and chunk B-tree v2 of any depth. Paged extensible-array data blocks
+  remain unsupported (clear error).
+
 ### Breaking
 
+- Requires Go 1.27.
+- `Attribute.ReadValue` returns unsigned Go types (`uint8`..`uint64`) for
+  unsigned attributes and `int8`/`int16` for small signed ones; unsigned
+  values were previously returned as wrongly-signed `int32`/`int64`.
+- A file whose child objects cannot be loaded now fails to open or list
+  instead of silently omitting them.
 - Files with dense attribute storage written by earlier versions of this
   library are no longer readable by this version (the Attribute Info message
   type, heap layout and index record layout changed to match the file format).
