@@ -785,19 +785,8 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 		return err
 	}
 	// Validate name
-	if !strings.HasPrefix(name, "/") {
-		return fmt.Errorf("group name must start with /: %s", name)
-	}
-	if name == "/" {
-		return fmt.Errorf("root group already exists")
-	}
-	if err := validateObjectPath(name); err != nil {
+	if err := validateDenseGroupArgs(name, links); err != nil {
 		return err
-	}
-	for linkName := range links {
-		if linkName == "" || strings.Contains(linkName, "/") {
-			return fmt.Errorf("invalid link name %q", linkName)
-		}
 	}
 
 	// Create DenseGroupWriter
@@ -1118,4 +1107,23 @@ func timesAndPhaseLen(flags byte) int64 {
 		n += 4
 	}
 	return n
+}
+
+// validateDenseGroupArgs checks the group path and link names of CreateDenseGroup.
+func validateDenseGroupArgs(name string, links map[string]string) error {
+	if !strings.HasPrefix(name, "/") {
+		return fmt.Errorf("group name must start with /: %s", name)
+	}
+	if name == "/" {
+		return fmt.Errorf("root group already exists")
+	}
+	if err := validateObjectPath(name); err != nil {
+		return err
+	}
+	for linkName := range links {
+		if linkName == "" || strings.Contains(linkName, "/") {
+			return fmt.Errorf("invalid link name %q", linkName)
+		}
+	}
+	return nil
 }

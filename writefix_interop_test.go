@@ -17,7 +17,7 @@ func h5dumpClean(t *testing.T, file string) string {
 	t.Helper()
 	h5dump := h5tool(t, "h5dump")
 	if dir := os.Getenv("H5_EXPORT_DIR"); dir != "" {
-		b, err := os.ReadFile(file) //nolint:gosec // test path
+		b, err := os.ReadFile(file)
 		require.NoError(t, err)
 		name := strings.ReplaceAll(t.Name(), "/", "_") + ".h5"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), b, 0o600))
@@ -28,10 +28,10 @@ func h5dumpClean(t *testing.T, file string) string {
 	return out
 }
 
-func newWriteFile(t *testing.T, opts ...WriteOption) (*FileWriter, string) {
+func newWriteFile(t *testing.T) (*FileWriter, string) {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "x.h5")
-	fw, err := CreateForWrite(file, CreateTruncate, opts...)
+	fw, err := CreateForWrite(file, CreateTruncate)
 	require.NoError(t, err)
 	return fw, file
 }
@@ -120,6 +120,7 @@ func TestCInterop_HardLinkThenSoftLink(t *testing.T) {
 	ds, err := fw.CreateDataset("/x", Int32, []uint64{2})
 	require.NoError(t, err)
 	require.NoError(t, ds.Write([]int32{4, 5}))
+	require.NoError(t, ds.WriteAttribute("fill", strings.Repeat("f", 200))) // leaves no room for a RefCount message
 	require.NoError(t, fw.CreateHardLink("/h0", "/x"))
 	require.NoError(t, fw.CreateHardLink("/h1", "/x"))
 	require.NoError(t, fw.CreateHardLink("/h2", "/x"))

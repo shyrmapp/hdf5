@@ -1569,8 +1569,6 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 //	    hdf5.WithChunkDims([]uint64{5}),
 //	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
 //	ds.Resize([]uint64{20})  // Extend to 20 elements
-//
-//nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
 func (dw *DatasetWriter) Resize(newDims []uint64) error {
 	if err := dw.usable(); err != nil {
 		return err
@@ -2356,25 +2354,7 @@ func (fw *FileWriter) Close() error {
 	// Every step runs and both handles are always closed, whatever fails.
 	var errs []error
 	if !fw.readOnly {
-		// Flush global heap before closing (for variable-length data)
-		if fw.globalHeapWriter != nil {
-			if err := fw.globalHeapWriter.Flush(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to flush global heap: %w", err))
-			}
-		}
-
-		// Rewrite the superblock with the final End-of-File address: allocations
-		// (datasets, attributes, groups) extend the file beyond the EOA written at
-		// creation, and h5py/h5wasm/h5dump fail with "actual len exceeds EOA".
-		if fw.file != nil && fw.file.sb != nil {
-			if err := fw.file.sb.WriteTo(fw.writer, fw.writer.EndOfFile()); err != nil {
-				errs = append(errs, fmt.Errorf("failed to update superblock EOA: %w", err))
-			}
-		}
-
-		if err := fw.writer.Flush(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to flush: %w", err))
-		}
+		errs = append(errs, fw.finalizeWrites()...)
 	}
 
 	if err := fw.writer.Close(); err != nil {
@@ -2392,6 +2372,33 @@ func (fw *FileWriter) Close() error {
 
 	fw.writer = nil
 	return errors.Join(errs...)
+}
+
+// finalizeWrites flushes the global heap, rewrites the superblock with the
+// final end-of-file address and flushes buffered writes; it returns every
+// error instead of stopping at the first.
+func (fw *FileWriter) finalizeWrites() []error {
+	var errs []error
+	// Flush global heap before closing (for variable-length data)
+	if fw.globalHeapWriter != nil {
+		if err := fw.globalHeapWriter.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush global heap: %w", err))
+		}
+	}
+
+	// Rewrite the superblock with the final End-of-File address: allocations
+	// (datasets, attributes, groups) extend the file beyond the EOA written at
+	// creation, and h5py/h5wasm/h5dump fail with "actual len exceeds EOA".
+	if fw.file != nil && fw.file.sb != nil {
+		if err := fw.file.sb.WriteTo(fw.writer, fw.writer.EndOfFile()); err != nil {
+			errs = append(errs, fmt.Errorf("failed to update superblock EOA: %w", err))
+		}
+	}
+
+	if err := fw.writer.Flush(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to flush: %w", err))
+	}
+	return errs
 }
 
 // initializeFileWriter creates and initializes a new FileWriter with the given mode.
