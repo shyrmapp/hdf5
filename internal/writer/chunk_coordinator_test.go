@@ -329,11 +329,12 @@ func TestExtractChunkData(t *testing.T) {
 
 		// Extract chunk 2 [8-9] (edge chunk, 2 elements)
 		chunk2 := cc.ExtractChunkData(data, []uint64{2}, elemSize)
-		require.Equal(t, 2*elemSize, uint32(len(chunk2)))
+		require.Equal(t, 4*elemSize, uint32(len(chunk2)), "edge chunks keep full chunk size")
 		for i := uint32(0); i < 2; i++ {
 			val := binary.LittleEndian.Uint32(chunk2[i*elemSize:])
 			require.Equal(t, i+8, val, "chunk2 element %d", i)
 		}
+		require.Equal(t, make([]byte, 2*elemSize), chunk2[2*elemSize:], "padding is zero")
 	})
 
 	t.Run("2D extraction", func(t *testing.T) {
@@ -424,12 +425,12 @@ func TestExtractChunkData(t *testing.T) {
 		//   Row 4: 28-34
 		// Elements: row3 col6 = 3*7+6=27, row4 col6 = 4*7+6=34
 		chunk := cc.ExtractChunkData(data, []uint64{1, 2}, elemSize)
-		require.Equal(t, 2*elemSize, uint32(len(chunk)))
+		require.Equal(t, 9*elemSize, uint32(len(chunk)), "edge chunks keep full chunk size")
 
-		val0 := binary.LittleEndian.Uint32(chunk[0:4])
-		val1 := binary.LittleEndian.Uint32(chunk[4:8])
-		require.Equal(t, uint32(27), val0)
-		require.Equal(t, uint32(34), val1)
+		// Full 3x3 chunk: the in-dataset 2x1 part sits at (0,0) and (1,0).
+		require.Equal(t, uint32(27), binary.LittleEndian.Uint32(chunk[0:4]))
+		require.Equal(t, uint32(34), binary.LittleEndian.Uint32(chunk[3*4:3*4+4]))
+		require.Equal(t, uint32(0), binary.LittleEndian.Uint32(chunk[4:8]))
 	})
 
 	t.Run("3D extraction", func(t *testing.T) {

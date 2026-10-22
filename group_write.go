@@ -76,6 +76,9 @@ type GroupWriter struct {
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion
 func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
+	if err := g.file.checkOpen(); err != nil {
+		return err
+	}
 	// Delegate to existing attribute writing infrastructure
 	// This reuses the same code path as DatasetWriter.WriteAttribute
 	return writeAttribute(g.file, g.headerAddr, name, value)
@@ -101,6 +104,9 @@ func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
 //
 // Reference: H5Adelete.c - H5A__delete().
 func (g *GroupWriter) DeleteAttribute(name string) error {
+	if err := g.file.checkOpen(); err != nil {
+		return err
+	}
 	return deleteAttribute(g.file, g.headerAddr, name)
 }
 
@@ -130,6 +136,15 @@ func validateGroupPath(path string) error {
 	}
 	if path == "/" {
 		return fmt.Errorf("root group already exists")
+	}
+	return validateObjectPath(path)
+}
+
+// validateObjectPath rejects paths whose last component is empty ("/a/",
+// "/a//b") — they would silently create an empty-named or trimmed child.
+func validateObjectPath(path string) error {
+	if strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+		return fmt.Errorf("invalid path %q: empty path component", path)
 	}
 	return nil
 }
@@ -213,6 +228,9 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 //   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
 func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
 	// Validate path
 	if err := validateGroupPath(path); err != nil {
 		return nil, err
@@ -266,6 +284,11 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
+	// Link to parent group (rejects duplicate names before anything is registered).
+	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
+		return nil, fmt.Errorf("failed to link to parent: %w", err)
+	}
+
 	// Store group metadata for nested dataset linking
 	fw.groups[path] = &GroupMetadata{
 		heapAddr:      heapAddr,
@@ -273,11 +296,6 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		btreeAddr:     btreeAddr,
 		headerAddr:    headerAddr,
 		headerAllocSz: headerSize,
-	}
-
-	// Link to parent group
-	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
-		return nil, fmt.Errorf("failed to link to parent: %w", err)
 	}
 
 	// Return GroupWriter handle
@@ -350,21 +368,6 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 		btreeAddr = meta.btreeAddr
 	}
 
-	// Step 1: Read existing local heap.
-	heap, err := fw.readLocalHeap(heapAddr)
-	if err != nil {
-		return fmt.Errorf("read local heap: %w", err)
-	}
-
-	// Step 2: Add child name to heap. If full, expand.
-	nameOffset, err := heap.AddString(childName)
-	if err != nil {
-		heap, heapAddr, nameOffset, err = fw.expandHeapAndAdd(heap, heapAddr, parentPath, childName)
-		if err != nil {
-			return err
-		}
-	}
-
 	// Step 3: Read ALL SNODs in this group (the B-tree may have multiple children after splits).
 	btreeNode, snodAddrs, err := fw.readGroupBTree(btreeAddr)
 	if err != nil {
@@ -379,6 +382,34 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 			return fmt.Errorf("read SNOD at 0x%X: %w", addr, readErr)
 		}
 		allEntries = append(allEntries, sn.Entries...)
+	}
+
+	// The group B-tree is a single leaf node sized for K=16 (fixed by the
+	// superblock): at most 2K SNODs. Fail before touching the file.
+	// shortcut: no multi-level B-tree; upgrade if >256 children per group is needed.
+	if len(allEntries)+1 > 2*groupBTreeK*snodCapacity {
+		return fmt.Errorf("group %q is full: v0 symbol-table groups hold at most %d children", parentPath, 2*groupBTreeK*snodCapacity)
+	}
+
+	// Step 1: Read existing local heap.
+	heap, err := fw.readLocalHeap(heapAddr)
+	if err != nil {
+		return fmt.Errorf("read local heap: %w", err)
+	}
+
+	for _, e := range allEntries {
+		if n, nameErr := heap.GetString(e.LinkNameOffset); nameErr == nil && n == childName {
+			return fmt.Errorf("%q already exists in group %q", childName, parentPath)
+		}
+	}
+
+	// Step 2: Add child name to heap. If full, expand.
+	nameOffset, err := heap.AddString(childName)
+	if err != nil {
+		heap, heapAddr, nameOffset, err = fw.expandHeapAndAdd(heap, heapAddr, parentPath, childName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Add the new entry.
@@ -427,7 +458,6 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 	// Step 4: Rebuild and write B-tree FIRST (before SNODs).
 	// For v0 format with fixed addresses, the B-tree write must complete before SNOD writes
 	// to avoid overwriting SNOD data with B-tree zero padding.
-	const groupBTreeK = 16 // B-tree internal node K (separate from GroupLeafNodeK).
 	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
 
 	for i := 0; i < numSNODs; i++ {
@@ -751,9 +781,12 @@ func (fw *FileWriter) readSymbolTableNode(addr uint64) (*structures.SymbolTableN
 //
 // Reference: H5Gcreate.c - H5Gcreate2().
 func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate name
-	if !strings.HasPrefix(name, "/") {
-		return fmt.Errorf("group name must start with /: %s", name)
+	if err := validateDenseGroupArgs(name, links); err != nil {
+		return err
 	}
 
 	// Create DenseGroupWriter
@@ -956,7 +989,6 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	offsetSize := fw.file.sb.OffsetSize
 
 	// Rebuild B-tree.
-	const groupBTreeK = 16
 	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
 
 	if len(allEntries) > 0 {
@@ -1018,33 +1050,50 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	return removedAddr, nil
 }
 
+// ohdrChunk0 returns, for a v2 object header at headerAddr, the offset of the
+// first message from the header start and the size of chunk 0's message area
+// (the checksum follows it).
+func (fw *FileWriter) ohdrChunk0(headerAddr uint64) (start, size int64, err error) {
+	var prefix [6]byte
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err = fw.writer.ReadAt(prefix[:], int64(headerAddr)); err != nil {
+		return 0, 0, err
+	}
+	if string(prefix[:4]) != "OHDR" {
+		return 0, 0, fmt.Errorf("no v2 object header at 0x%X", headerAddr)
+	}
+	width := int64(1) << (prefix[5] & 0x03)
+	start = 6 + timesAndPhaseLen(prefix[5]) + width
+	sizeBuf := make([]byte, 8)
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err = fw.writer.ReadAt(sizeBuf[:width], int64(headerAddr)+start-width); err != nil {
+		return 0, 0, err
+	}
+	return start, int64(binary.LittleEndian.Uint64(sizeBuf)), nil //nolint:gosec // G115: chunk size is small
+}
+
 // refreshOHDRChecksum recomputes the trailing Jenkins checksum of a v2 object
 // header after its bytes were patched in place. v1 headers have no checksum.
 func (fw *FileWriter) refreshOHDRChecksum(headerAddr uint64) error {
-	var prefix [6]byte
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(prefix[:], int64(headerAddr)); err != nil {
-		return err
+	start, size, err := fw.ohdrChunk0(headerAddr)
+	if err != nil {
+		return nil //nolint:nilerr // v1 headers have no checksum
 	}
-	if string(prefix[:4]) != "OHDR" {
-		return nil
-	}
-	width := 1 << (prefix[5] & 0x03)
-	sizeBuf := make([]byte, 8)
+	return fw.refreshChecksum(headerAddr, start+size)
+}
+
+// refreshChecksum rewrites the 4-byte Jenkins checksum that follows the n
+// bytes at addr (an OHDR chunk or an OCHK block).
+func (fw *FileWriter) refreshChecksum(addr uint64, n int64) error {
+	buf := make([]byte, n)
 	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(sizeBuf[:width], int64(headerAddr)+6+timesAndPhaseLen(prefix[5])); err != nil {
-		return err
-	}
-	total := 6 + timesAndPhaseLen(prefix[5]) + int64(width) + int64(binary.LittleEndian.Uint64(sizeBuf)) //nolint:gosec // G115: chunk size is small
-	buf := make([]byte, total)
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(buf, int64(headerAddr)); err != nil {
+	if _, err := fw.writer.ReadAt(buf, int64(addr)); err != nil {
 		return err
 	}
 	var sum [4]byte
 	binary.LittleEndian.PutUint32(sum[:], core.JenkinsChecksum(buf))
 	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	_, err := fw.writer.WriteAt(sum[:], int64(headerAddr)+total)
+	_, err := fw.writer.WriteAt(sum[:], int64(addr)+n)
 	return err
 }
 
@@ -1058,4 +1107,23 @@ func timesAndPhaseLen(flags byte) int64 {
 		n += 4
 	}
 	return n
+}
+
+// validateDenseGroupArgs checks the group path and link names of CreateDenseGroup.
+func validateDenseGroupArgs(name string, links map[string]string) error {
+	if !strings.HasPrefix(name, "/") {
+		return fmt.Errorf("group name must start with /: %s", name)
+	}
+	if name == "/" {
+		return fmt.Errorf("root group already exists")
+	}
+	if err := validateObjectPath(name); err != nil {
+		return err
+	}
+	for linkName := range links {
+		if linkName == "" || strings.Contains(linkName, "/") {
+			return fmt.Errorf("invalid link name %q", linkName)
+		}
+	}
+	return nil
 }

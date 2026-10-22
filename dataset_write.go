@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"unsafe"
@@ -483,8 +484,8 @@ func init() {
 		// Floats
 		// Float ClassBitField: bits 0-7 = byte order + norm (0x20 = implied MSB),
 		// bits 8-15 = sign bit position (31 for float32, 63 for float64)
-		Float32: &basicTypeHandler{core.DatatypeFloat, 4, 0x1F20}, // sign=31, norm=implied
-		Float64: &basicTypeHandler{core.DatatypeFloat, 8, 0x3F20}, // sign=63, norm=implied
+		Float32: &basicTypeHandler{core.DatatypeFloat, 4, float32ClassBits}, // sign=31, norm=implied
+		Float64: &basicTypeHandler{core.DatatypeFloat, 8, float64ClassBits}, // sign=63, norm=implied
 
 		// String
 		String: &stringTypeHandler{},
@@ -550,6 +551,15 @@ const groupLeafNodeK = 4
 // Per C reference (H5Gnode.c:598): split when nsyms >= 2 * H5F_SYM_LEAF_K(f).
 const snodCapacity = 2 * groupLeafNodeK // 8
 
+// IEEE 754 float class bit fields: LE, implied-MSB normalization, sign bit position.
+const (
+	float32ClassBits = 0x1F20
+	float64ClassBits = 0x3F20
+)
+
+// groupBTreeK is the group B-tree internal node K (superblock-wide).
+const groupBTreeK = 16
+
 // snodEntrySize is the on-disk size of each SNOD entry (for 8-byte offsets).
 // Format: offsetSize*2 + 4 (cache type) + 4 (reserved) + 16 (scratch-pad) = 40 bytes.
 const snodEntrySize = 2*8 + 4 + 4 + 16 // 40
@@ -570,11 +580,15 @@ type GroupMetadata struct {
 
 // FileWriter represents an HDF5 file opened for writing.
 // It wraps a File handle and provides write operations.
+//
+// A FileWriter and the DatasetWriter/GroupWriter handles it returns are not safe
+// for concurrent use; serialize all calls (including Close) externally.
 type FileWriter struct {
 	file     *File
 	writer   *writer.FileWriter
 	filename string
 	config   *FileWriteConfig // Configuration for write operations
+	readOnly bool             // opened with OpenReadOnly: Close must not write
 
 	// Root group metadata for linking objects
 	rootGroupAddr     uint64 // Address of root group object header
@@ -594,26 +608,36 @@ type FileWriter struct {
 	// of overwriting whatever follows.
 	headerAllocs map[uint64]uint64
 
+	// Dataset writers handed out, by header address, so Delete can invalidate them.
+	liveWriters map[uint64][]*DatasetWriter
+
 	// Global heap writer for variable-length data (vlen strings, ragged arrays)
 	globalHeapWriter *globalHeapWriter
 }
 
-// lookupHeaderAllocSize returns the original allocation size for an object header
-// at the given address. Returns 0 if not tracked (e.g., for legacy files opened
-// with OpenForWrite, where we don't know the original allocation).
+// lookupHeaderAllocSize returns the allocation size of the object header at
+// objectAddr: the tracked size when this writer created it, otherwise the
+// extent of the first chunk as stored in the file (a lower bound of the real
+// allocation, so growing past it is always safe to route to a continuation
+// block). Returns 0 only when the header cannot be parsed.
 func (fw *FileWriter) lookupHeaderAllocSize(objectAddr uint64) uint64 {
-	// Check root group.
+	tracked := fw.headerAllocs[objectAddr]
 	if objectAddr == fw.rootGroupAddr {
-		return fw.rootHeaderAllocSz
+		tracked = fw.rootHeaderAllocSz
 	}
-	// Check non-root groups.
 	for _, meta := range fw.groups {
 		if meta.headerAddr == objectAddr {
-			return meta.headerAllocSz
+			tracked = meta.headerAllocSz
 		}
 	}
-	// Datasets and other tracked headers.
-	return fw.headerAllocs[objectAddr]
+	if tracked > 0 {
+		return tracked
+	}
+	start, size, err := fw.ohdrChunk0(objectAddr)
+	if err != nil {
+		return 0
+	}
+	return uint64(start+size) + 4 //nolint:gosec // G115: small non-negative values
 }
 
 // Superblock version constants for file creation.
@@ -807,7 +831,7 @@ func validateDatasetName(name string) error {
 	if name[0] != '/' {
 		return fmt.Errorf("dataset name must start with '/' (got %q)", name)
 	}
-	return nil
+	return validateObjectPath(name)
 }
 
 // validateDimensions validates that dimensions is not empty and no dimension is zero.
@@ -862,7 +886,15 @@ func calculateTotalElements(dims []uint64) uint64 {
 //   - Resizable datasets require chunked layout (use WithMaxDims with WithChunkDims)
 //
 //nolint:gocyclo,cyclop,gocognit,funlen // Complex by nature: dataset creation handles multiple layout types and options
-func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
+func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
 		return nil, err
@@ -1041,7 +1073,15 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 // Reference: H5Dcreate2.c - H5D__create(), H5Tcompound.c - compound datatype handling.
 //
 //nolint:gocyclo,cyclop // Dataset creation requires validation and setup (complexity justified for public API)
-func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
+func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
 		return nil, err
@@ -1200,6 +1240,9 @@ type DatasetWriter struct {
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
+
+	deleted      bool  // the object was deleted; the writer must not touch its former space
+	dataWriteErr error // why raw data cannot be written (non-contiguous layout of an opened dataset)
 }
 
 // Write writes data to the dataset.
@@ -1227,6 +1270,9 @@ type DatasetWriter struct {
 //	// Flatten row-major: [[1,2,3,4], [5,6,7,8], [9,10,11,12]]
 //	ds2.Write([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 func (dw *DatasetWriter) Write(data interface{}) error {
+	if err := dw.writable(); err != nil {
+		return err
+	}
 	// Handle variable-length data separately (uses global heap)
 	if dw.dtype.Class == core.DatatypeVarLen {
 		return dw.writeVLen(data)
@@ -1291,6 +1337,9 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 //	data := []byte{/* encoded struct bytes */}
 //	err := ds.WriteRaw(data)
 func (dw *DatasetWriter) WriteRaw(data []byte) error {
+	if err := dw.writable(); err != nil {
+		return err
+	}
 	// Verify size matches expected dataset size
 	if uint64(len(data)) != dw.dataSize {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", dw.dataSize, len(data))
@@ -1520,9 +1569,10 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 //	    hdf5.WithChunkDims([]uint64{5}),
 //	    hdf5.WithMaxDims([]uint64{hdf5.Unlimited}))
 //	ds.Resize([]uint64{20})  // Extend to 20 elements
-//
-//nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
 func (dw *DatasetWriter) Resize(newDims []uint64) error {
+	if err := dw.usable(); err != nil {
+		return err
+	}
 	// 1. Validate input.
 	if !dw.isChunked {
 		return fmt.Errorf("resize requires chunked layout")
@@ -1545,56 +1595,30 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 		}
 	}
 
-	// 3. Read object header from file if not already loaded.
-	if dw.objectHeader == nil {
-		oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address,
-			dw.fileWriter.file.sb)
-		if err != nil {
-			return fmt.Errorf("read object header: %w", err)
-		}
-		dw.objectHeader = oh
+	// 3. Re-read the header: attributes, the layout's B-tree address and a
+	// continuation block may all have changed since this writer was created.
+	oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address, dw.fileWriter.file.sb)
+	if err != nil {
+		return fmt.Errorf("read object header: %w", err)
 	}
 
-	// 4. Find and update dataspace message.
-	var dataspaceMsg *core.DataspaceMessage
-	var dataspaceIdx int
-	found := false
-	for i, msg := range dw.objectHeader.Messages {
-		if msg.Type != core.MsgDataspace { // Skip non-dataspace messages
-			continue
-		}
-		// Found dataspace message.
-		ds, err := core.ParseDataspaceMessage(msg.Data)
-		if err != nil {
-			return fmt.Errorf("parse dataspace: %w", err)
-		}
-		dataspaceMsg = ds
-		dataspaceIdx = i
-		found = true
-		break
-	}
-
-	if !found {
-		return fmt.Errorf("dataspace message not found in object header")
-	}
-
-	// 5. Update dimensions.
-	dataspaceMsg.Dimensions = newDims
-
-	// 6. Re-encode dataspace message.
+	// 4. Patch only the dataspace message, in place.
 	newDataspaceData, err := core.EncodeDataspaceMessage(newDims, dw.maxDims)
 	if err != nil {
 		return fmt.Errorf("encode dataspace: %w", err)
 	}
-
-	// 7. Update message in object header.
-	dw.objectHeader.Messages[dataspaceIdx].Data = newDataspaceData
-
-	// 8. Write updated object header back to file.
-	err = core.WriteObjectHeader(dw.fileWriter.writer, dw.address,
-		dw.objectHeader, dw.fileWriter.file.sb)
-	if err != nil {
-		return fmt.Errorf("write object header: %w", err)
+	var dataspaceMsg *core.HeaderMessage
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgDataspace {
+			dataspaceMsg = msg
+			break
+		}
+	}
+	if dataspaceMsg == nil {
+		return fmt.Errorf("dataspace message not found in object header")
+	}
+	if err := dw.fileWriter.patchHeaderMessage(dw.address, oh, dataspaceMsg, newDataspaceData); err != nil {
+		return fmt.Errorf("update dataspace: %w", err)
 	}
 
 	// 9. Update internal state.
@@ -2189,6 +2213,7 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		rootHeaderAllocSz: rootHeaderAllocSz,
 		groups:            make(map[string]*GroupMetadata),
 		headerAllocs:      make(map[uint64]uint64),
+		readOnly:          mode != OpenReadWrite,
 	}
 
 	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
@@ -2219,7 +2244,15 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 //	ds.WriteAttribute("units", "Celsius")  // Works with existing dense storage!
 //
 //nolint:gocognit,gocyclo,cyclop // Complex navigation logic with multiple object types and error paths
-func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
+func (fw *FileWriter) OpenDataset(path string) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Step 1: Navigate to dataset using file.Walk()
 	var foundDataset *Dataset
 	fw.file.Walk(func(p string, obj Object) {
@@ -2297,6 +2330,11 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		objectHeader:  oh,          // Store object header for attribute operations
 		denseAttrInfo: attrInfoMsg, // May be nil if no dense storage yet
 	}
+	// shortcut: only contiguous datasets can be rewritten after OpenDataset; chunked/compact
+	// state is not reconstructed. Upgrade when RMW of chunked datasets is needed.
+	if layoutMsg.Class != core.LayoutContiguous || layoutMsg.DataAddress == undefinedAddress {
+		dsw.dataWriteErr = fmt.Errorf("dataset %q: writing data to an opened dataset requires contiguous layout with allocated storage", path)
+	}
 
 	return dsw, nil
 }
@@ -2313,33 +2351,14 @@ func (fw *FileWriter) Close() error {
 		return nil
 	}
 
-	// Flush global heap before closing (for variable-length data)
-	if fw.globalHeapWriter != nil {
-		if err := fw.globalHeapWriter.Flush(); err != nil {
-			return fmt.Errorf("failed to flush global heap: %w", err)
-		}
+	// Every step runs and both handles are always closed, whatever fails.
+	var errs []error
+	if !fw.readOnly {
+		errs = append(errs, fw.finalizeWrites()...)
 	}
 
-	// CRITICAL FIX (Issue #22): Rewrite superblock with final End-of-File address.
-	// The superblock EOA is written once at file creation time, but subsequent
-	// allocations (datasets, attributes, groups) extend the file beyond the
-	// initial EOA. Without updating it, h5py/h5wasm/h5dump fail with
-	// "actual len exceeds EOA".
-	if fw.file != nil && fw.file.sb != nil {
-		finalEOF := fw.writer.EndOfFile()
-		if err := fw.file.sb.WriteTo(fw.writer, finalEOF); err != nil {
-			return fmt.Errorf("failed to update superblock EOA: %w", err)
-		}
-	}
-
-	// Flush buffered writes
-	if err := fw.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush: %w", err)
-	}
-
-	// Close writer
 	if err := fw.writer.Close(); err != nil {
-		return fmt.Errorf("failed to close writer: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
 	}
 
 	// Close the read-side file handle (opened by OpenForWrite via Open()).
@@ -2347,12 +2366,39 @@ func (fw *FileWriter) Close() error {
 	// subsequent file operations.
 	if fw.file != nil {
 		if err := fw.file.Close(); err != nil {
-			return fmt.Errorf("failed to close read handle: %w", err)
+			errs = append(errs, fmt.Errorf("failed to close read handle: %w", err))
 		}
 	}
 
 	fw.writer = nil
-	return nil
+	return errors.Join(errs...)
+}
+
+// finalizeWrites flushes the global heap, rewrites the superblock with the
+// final end-of-file address and flushes buffered writes; it returns every
+// error instead of stopping at the first.
+func (fw *FileWriter) finalizeWrites() []error {
+	var errs []error
+	// Flush global heap before closing (for variable-length data)
+	if fw.globalHeapWriter != nil {
+		if err := fw.globalHeapWriter.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush global heap: %w", err))
+		}
+	}
+
+	// Rewrite the superblock with the final End-of-File address: allocations
+	// (datasets, attributes, groups) extend the file beyond the EOA written at
+	// creation, and h5py/h5wasm/h5dump fail with "actual len exceeds EOA".
+	if fw.file != nil && fw.file.sb != nil {
+		if err := fw.file.sb.WriteTo(fw.writer, fw.writer.EndOfFile()); err != nil {
+			errs = append(errs, fmt.Errorf("failed to update superblock EOA: %w", err))
+		}
+	}
+
+	if err := fw.writer.Flush(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to flush: %w", err))
+	}
+	return errs
 }
 
 // initializeFileWriter creates and initializes a new FileWriter with the given mode.
@@ -2466,7 +2512,6 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	// where K=16 (GroupInternalNodeK). Full size: 24 + 33*8 + 32*8 = 544 bytes.
 	// Must reserve the FULL B-tree size even though only 1 child is initially used,
 	// because WriteAt writes the complete 544-byte buffer (with zero padding).
-	const groupBTreeK = 16
 	btreeSize := uint64(8 + 2*offsetSize + (2*groupBTreeK+1)*offsetSize + 2*groupBTreeK*offsetSize)
 
 	// Symbol table node size: 8-byte header + snodCapacity * 40 bytes per entry.

@@ -42,6 +42,9 @@ const undefinedAddress = uint64(0xFFFFFFFFFFFFFFFF)
 //
 // Reference: H5Ldelete.c, H5G_obj_remove(), H5O_link(adjust=-1), H5O_delete().
 func (fw *FileWriter) Delete(path string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate path.
 	if path == "" {
 		return fmt.Errorf("delete: path cannot be empty")
@@ -100,6 +103,9 @@ func (fw *FileWriter) Delete(path string) error {
 	// Step 5: Remove from groups map if tracked.
 	delete(fw.groups, path)
 
+	// The object's space may be reused: stale writers must not touch it.
+	fw.markDeleted(objectAddr)
+
 	return nil
 }
 
@@ -114,8 +120,17 @@ func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core
 		return nil
 	}
 
-	// V2: Update or add RefCount message (type 0x0016).
-	// Body: version byte (0) + uint32 count (H5Orefcount.c).
+	// V2: patch or add the RefCount message within the header's allocation.
+	legacy := false
+	for _, msg := range oh.Messages {
+		legacy = legacy || (msg.Type == core.MsgRefCount && len(msg.Data) == 4)
+	}
+	if !legacy {
+		return writeV2RefCount(fw, addr, oh)
+	}
+
+	// Pre-v0.15 files stored the count without the version byte; rewrite those
+	// headers whole.
 	refCountData := make([]byte, 5)
 	refCountData[0] = 0 // message version
 	sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)

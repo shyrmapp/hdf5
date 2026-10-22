@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -49,6 +50,9 @@ const (
 // Limitations:
 //   - No compound types
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
+	if err := ds.usable(); err != nil {
+		return err
+	}
 	// For datasets opened with OpenForWrite, use cached object header and dense attr info
 	if ds.objectHeader != nil {
 		return writeAttributeWithCachedHeader(ds.fileWriter, ds.address, ds.objectHeader, ds.denseAttrInfo, name, value)
@@ -72,6 +76,9 @@ func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 //
 // Reference: H5Adelete.c - H5A__delete(), H5Adense.c - H5A__dense_remove().
 func (ds *DatasetWriter) DeleteAttribute(name string) error {
+	if err := ds.usable(); err != nil {
+		return err
+	}
 	// For datasets opened with OpenForWrite, use cached object header and dense attr info
 	if ds.objectHeader != nil {
 		return deleteAttributeWithCachedHeader(ds.fileWriter, ds.address, ds.objectHeader, ds.denseAttrInfo, name)
@@ -180,34 +187,30 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	if err != nil {
 		return fmt.Errorf("failed to encode attribute message: %w", err)
 	}
+	// Header message sizes are 16-bit; a larger message would corrupt the header.
+	if len(attrMsg) > math.MaxUint16 {
+		return fmt.Errorf("attribute %q is too large (%d bytes encoded, header message limit is %d)", name, len(attrMsg), math.MaxUint16)
+	}
 
-	// 4. Upsert: replace if exists.
+	// 4. Upsert: same-size replacement is patched in place; a different size
+	// drops the old message and appends the new one like a fresh attribute.
 	if existingIndex >= 0 {
-		oh.Messages[existingIndex].Data = attrMsg
-		return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
+		old := oh.Messages[existingIndex]
+		if len(old.Data) == len(attrMsg) {
+			return fw.patchHeaderMessage(objectAddr, oh, old, attrMsg)
+		}
+		if old.FromContinuation {
+			return fmt.Errorf("cannot change the size of attribute %q stored in a continuation block", name)
+		}
+		oh.Messages = append(oh.Messages[:existingIndex:existingIndex], oh.Messages[existingIndex+1:]...)
 	}
 
-	// 5. Remove null padding messages and continuation-sourced messages.
-	// Null messages (type 0) are used as padding and can be safely removed.
-	// Messages from OCHK continuation blocks should not be rewritten into the main OHDR.
-	oh.Messages = filterMainChunkMessages(oh.Messages)
-
-	// 6. Add new attribute message.
-	if err := core.AddMessageToObjectHeader(oh, core.MsgAttribute, attrMsg); err != nil {
-		return fmt.Errorf("failed to add message to header: %w", err)
+	// 5. Append, spilling to a continuation block if the header is full.
+	err = fw.appendHeaderMessage(objectAddr, oh, core.MsgAttribute, attrMsg, sb)
+	if errors.Is(err, errHeaderFull) {
+		return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
 	}
-
-	// 7. Bounds check: does the modified OHDR fit in its allocation?
-	allocSize := fw.lookupHeaderAllocSize(objectAddr)
-	newSize := core.ObjectHeaderSizeFromParsed(oh)
-
-	if allocSize > 0 && newSize > allocSize {
-		// Overflow: the new attribute doesn't fit. Use a continuation chunk.
-		return writeAttributeViaContinuation(fw, objectAddr, oh, attrMsg, name, value, sb, allocSize)
-	}
-
-	// Fits in allocation (or allocation unknown for legacy files).
-	return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
+	return err
 }
 
 // writeOHDRWithBoundsCheck writes the object header back to disk and updates the
@@ -229,56 +232,6 @@ func writeOHDRWithBoundsCheck(fw *FileWriter, objectAddr uint64, oh *core.Object
 	}
 
 	return nil
-}
-
-// writeAttributeViaContinuation handles the case where an attribute doesn't fit
-// in the OHDR's original allocation. It:
-//  1. Removes the last message (the attribute that caused overflow) from oh.Messages.
-//  2. Writes the attribute in a new OCHK continuation block.
-//  3. Adds a continuation message (type 0x0010) to the main OHDR pointing to the OCHK.
-//  4. Rewrites the main OHDR (which now has the small continuation message instead
-//     of the large attribute message, so it should fit).
-//
-// If even the continuation message doesn't fit, fall back to dense storage transition.
-func writeAttributeViaContinuation(fw *FileWriter, objectAddr uint64, oh *core.ObjectHeader,
-	attrMsg []byte, name string, value interface{}, sb *core.Superblock, allocSize uint64) error {
-	// Remove the last message (the attribute we just added that caused overflow).
-	lastIdx := len(oh.Messages) - 1
-	oh.Messages = oh.Messages[:lastIdx]
-
-	// Write the attribute to an OCHK continuation block.
-	ochkMessages := []core.MessageWriter{
-		{Type: core.MsgAttribute, Data: attrMsg},
-	}
-	ochkSize := core.ContinuationChunkSizeV2(ochkMessages)
-
-	allocator := fw.writer.Allocator()
-	ochkAddr, err := allocator.Allocate(ochkSize)
-	if err != nil {
-		return fmt.Errorf("failed to allocate OCHK continuation block: %w", err)
-	}
-
-	if _, err := core.WriteContinuationChunkV2(fw.writer, ochkAddr, ochkMessages); err != nil {
-		return fmt.Errorf("failed to write OCHK continuation block: %w", err)
-	}
-
-	// Add a continuation message (type 0x0010) to the main OHDR.
-	contMsgData := core.EncodeContinuationMessage(ochkAddr, ochkSize, sb)
-	if err := core.AddMessageToObjectHeader(oh, core.MsgContinuation, contMsgData); err != nil {
-		return fmt.Errorf("failed to add continuation message: %w", err)
-	}
-
-	// Check if the OHDR with continuation message fits.
-	newSize := core.ObjectHeaderSizeFromParsed(oh)
-	if newSize > allocSize {
-		// Even the continuation message doesn't fit -- fall back to dense.
-		// Remove the continuation message we just added.
-		oh.Messages = oh.Messages[:len(oh.Messages)-1]
-		return transitionToDenseAttributes(fw, objectAddr, oh, name, value, sb)
-	}
-
-	// Rewrite the main OHDR (now with continuation message instead of attribute).
-	return writeOHDRWithBoundsCheck(fw, objectAddr, oh, sb)
 }
 
 // filterMainChunkMessages removes null padding messages and messages that
@@ -1103,12 +1056,12 @@ func inferUnsignedInt(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMe
 
 // inferFloat infers datatype for floating point numbers.
 func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
-	var size uint32
+	var size, bitField uint32
 	switch v.Kind() {
 	case reflect.Float32:
-		size = 4
+		size, bitField = 4, float32ClassBits
 	case reflect.Float64:
-		size = 8
+		size, bitField = 8, float64ClassBits
 	default:
 		return nil, nil, fmt.Errorf("not a float type")
 	}
@@ -1116,7 +1069,7 @@ func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	dt := &core.DatatypeMessage{
 		Class:         core.DatatypeFloat,
 		Size:          size,
-		ClassBitField: 0, // Little-endian
+		ClassBitField: bitField,
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1178,9 +1131,9 @@ func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	case reflect.Uint64:
 		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 8, ClassBitField: 0}
 	case reflect.Float32:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 4, ClassBitField: 0}
+		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 4, ClassBitField: float32ClassBits}
 	case reflect.Float64:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 8, ClassBitField: 0}
+		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 8, ClassBitField: float64ClassBits}
 	default:
 		return nil, nil, fmt.Errorf("unsupported slice element type: %s", elemKind)
 	}

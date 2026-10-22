@@ -16,6 +16,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position. `OpenForWrite` refuses such files. Five previously skipped files
   of the official test suite now pass (385/387).
 
+### Breaking
+
+- **Write path now rejects names it used to accept.** Creating a second child
+  with an existing name, `CreateDataset("/")`, and paths with a trailing slash
+  or empty component (`"/a/"`, `"/a//b"`) return an error; before, they
+  produced duplicate links, an orphaned group or an empty-named child.
+  A `DatasetWriter` from `OpenDataset` only writes data to contiguous
+  datasets with allocated storage, and any writer errors after `Close` or
+  after its object was deleted (it used to panic or overwrite reused space).
+
+### Fixed (write path)
+
+- A group with more than 256 children returns an error instead of silently
+  corrupting the file (the v0 group B-tree is a single K=16 node).
+- Float attributes carry the full IEEE class bits; C read `float32(1.25)` as 0.5.
+- Object headers stay within their allocation: after `OpenForWrite`, for
+  chunked datasets written between attributes (checksum mismatch), and when
+  `CreateHardLink` or `Delete` update the reference count. Overflow moves to a
+  continuation block; attribute upserts patch in place when the size is equal.
+- `Resize` after `Write` patches only the dataspace message; it used to rewrite
+  a stale header and lose data and attributes.
+- Chunked edge chunks are stored at full chunk size (C read zeros or errored).
+- Unwritten chunked datasets store an undefined B-tree address and a default
+  fill value, so `h5dump` can read them.
+- Attributes over 64 KiB are rejected instead of corrupting the header.
+- `OpenForWrite(OpenReadOnly)` then `Close` no longer fails, and `Close`
+  releases both file handles even on error.
+- `CreateDenseGroup` rejects blank group and link names.
+- Fletcher32 chunks are written with the HDF5 C checksum (big-endian words,
+  folding reduction); the old sums were only accepted by C through its
+  legacy byte-swap tolerance, except for some data.
+- Known gap: `CreateExternalLink` output is still not readable by `h5dump`
+  (an external link needs a link-message group, not a symbol table entry).
+- `FileWriter` is documented as not safe for concurrent use.
+
 ### Fixed
 
 - **Hostile chunked and compact datasets are refused instead of panicking or

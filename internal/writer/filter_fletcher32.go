@@ -2,6 +2,8 @@ package writer
 
 import (
 	"encoding/binary"
+
+	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // Fletcher32Filter implements Fletcher32 checksum (FilterID = 3).
@@ -37,7 +39,7 @@ func (f *Fletcher32Filter) Name() string {
 // The returned data is 4 bytes longer than the input, with the checksum
 // stored in little-endian format at the end.
 func (f *Fletcher32Filter) Apply(data []byte) ([]byte, error) {
-	checksum := calculateFletcher32(data)
+	checksum := core.Fletcher32(data)
 
 	// Append 4-byte checksum (little-endian)
 	result := make([]byte, len(data)+4)
@@ -52,38 +54,4 @@ func (f *Fletcher32Filter) Apply(data []byte) ([]byte, error) {
 // Fletcher32 has no parameters, so this returns empty values.
 func (f *Fletcher32Filter) Encode() (flags uint16, cdValues []uint32) {
 	return 0, []uint32{}
-}
-
-// calculateFletcher32 calculates the Fletcher32 checksum.
-//
-// Fletcher32 algorithm:
-//  1. Process data in 16-bit words (little-endian)
-//  2. Maintain two 16-bit sums (sum1 and sum2)
-//  3. sum1 = (sum1 + word) mod 65535
-//  4. sum2 = (sum2 + sum1) mod 65535
-//  5. checksum = (sum2 << 16) | sum1
-//
-// For odd-length data, the last byte is treated as a 16-bit word with
-// high byte = 0.
-func calculateFletcher32(data []byte) uint32 {
-	var sum1, sum2 uint32
-
-	// Process data in 16-bit words
-	i := 0
-	for i+1 < len(data) {
-		// Read 16-bit word (little-endian)
-		word := uint32(data[i]) | uint32(data[i+1])<<8
-		sum1 = (sum1 + word) % 65535
-		sum2 = (sum2 + sum1) % 65535
-		i += 2
-	}
-
-	// Handle last byte if data length is odd
-	if i < len(data) {
-		word := uint32(data[i])
-		sum1 = (sum1 + word) % 65535
-		sum2 = (sum2 + sum1) % 65535
-	}
-
-	return (sum2 << 16) | sum1
 }

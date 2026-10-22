@@ -54,9 +54,9 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 		return nil, fmt.Errorf("failed to create chunk coordinator: %w", err)
 	}
 
-	// 4. B-tree address will be 0 initially (written during Write())
-	// This is standard HDF5 practice for empty chunked datasets
-	btreeAddress := uint64(0)
+	// 4. B-tree address is undefined (all 0xFF) until the first Write(), as the
+	// C library stores it for datasets without allocated chunks.
+	btreeAddress := undefinedAddress
 
 	// 5. Encode datatype message
 	handler := datatypeRegistry[dtype]
@@ -109,6 +109,10 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 			{Type: core.MsgDatatype, Data: datatypeData},
 			{Type: core.MsgDataspace, Data: dataspaceData},
 			{Type: core.MsgDataLayout, Data: layoutData},
+			// Fill value v3: incremental allocation, default (zero) fill. Without a
+			// fill message the C library treats the fill value as undefined and
+			// refuses to read a dataset whose chunks are not yet allocated.
+			{Type: core.MsgFillValue, Data: []byte{3, 0x02}},
 		},
 	}
 
@@ -162,11 +166,13 @@ func (fw *FileWriter) createChunkedDataset(name string, dtype Datatype, dims []u
 	//     - Layout header: 4 bytes
 	//     - Layout data: version(1) + class(1) + dimensionality(1) + btreeAddress(offsetSize)
 	// The B-tree address is at offset 3 within layout message data.
-	layoutBTreeOffset := headerAddress +
-		4 + // OHDR
-		1 + // version
-		1 + // flags
-		1 + // chunk size
+	// The chunk-size field is 1-8 bytes wide depending on the header size, so
+	// ask the written header where its messages start.
+	msgStart, _, err := fw.ohdrChunk0(headerAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate layout message: %w", err)
+	}
+	layoutBTreeOffset := headerAddress + uint64(msgStart) + //nolint:gosec // G115: small non-negative offset
 		4 + uint64(len(datatypeData)) + // datatype message
 		4 + uint64(len(dataspaceData)) + // dataspace message
 		4 + // layout message header
@@ -313,21 +319,10 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 			return fmt.Errorf("failed to update B-tree address in layout message: %w", err)
 		}
 
-		// Recompute V2 object header Jenkins checksum after patching the B-tree address.
-		// The checksum covers all bytes from OHDR signature through messages (excluding
-		// the 4-byte checksum itself). Without this, h5dump rejects the header with
-		// "incorrect metadata checksum after all read attempts".
-		checksumSize := uint64(4)
-		dataLen := dw.headerSize - checksumSize
-		ohdrBuf := make([]byte, dataLen)
-		if _, readErr := dw.fileWriter.writer.Reader().ReadAt(ohdrBuf, int64(dw.address)); readErr != nil { //nolint:gosec // G115: address within file bounds
-			return fmt.Errorf("failed to read object header for checksum: %w", readErr)
-		}
-		newChecksum := core.JenkinsChecksum(ohdrBuf)
-		var csumBuf [4]byte
-		binary.LittleEndian.PutUint32(csumBuf[:], newChecksum)
-		if err := dw.fileWriter.writer.WriteAtAddress(csumBuf[:], dw.address+dataLen); err != nil {
-			return fmt.Errorf("failed to write object header checksum: %w", err)
+		// Recompute the checksum from the header's current chunk size: attributes
+		// written before the first Write may have grown it since creation.
+		if err := dw.fileWriter.refreshOHDRChecksum(dw.address); err != nil {
+			return fmt.Errorf("failed to refresh object header checksum: %w", err)
 		}
 	}
 
