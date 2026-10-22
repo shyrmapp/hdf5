@@ -157,52 +157,23 @@ func writeV1RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 	return nil
 }
 
-// writeV2RefCount writes reference count for v2 object header.
+// writeV2RefCount stores the reference count of a v2 object header in its
+// RefCount message (type 0x0016), patching an existing message in place and
+// appending a new one within the header's allocation (or a continuation block).
 func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
-	// V2: Reference count stored in RefCount message (type 0x0016)
-	// If refcount > 1, we need to add/update RefCount message
-	if oh.ReferenceCount > 1 {
-		if err := ensureRefCountMessage(fw, oh); err != nil {
-			return err
-		}
-	}
-
-	// Write entire object header back to disk. The RefCount message may have
-	// grown the header past its allocation at the end of the file, so use the
-	// bounds-checked writer that advances the allocator (and thus the
-	// superblock EOA on Close) — a bare WriteObjectHeader left the EOA 8
-	// bytes short and the C library rejected the file ("exceeds EOA").
-	if err := writeOHDRWithBoundsCheck(fw, addr, oh, fw.file.sb); err != nil {
-		return fmt.Errorf("failed to write v2 object header: %w", err)
-	}
-	return nil
-}
-
-// ensureRefCountMessage ensures RefCount message exists and is updated.
-func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 	// RefCount message body: version (1 byte, always 0) + 4-byte count.
 	// Reference: H5Orefcount.c - H5O__refcount_decode().
-
-	// Check if RefCount message already exists
+	data := make([]byte, 5)
+	fw.file.sb.Endianness.PutUint32(data[1:], oh.ReferenceCount)
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgRefCount && len(msg.Data) >= 5 {
-			// Update existing RefCount message data (skip version byte)
-			fw.file.sb.Endianness.PutUint32(msg.Data[1:5], oh.ReferenceCount)
-			return nil
+		if msg.Type == core.MsgRefCount && len(msg.Data) == len(data) {
+			return fw.patchHeaderMessage(addr, oh, msg, data)
 		}
 	}
-
-	// Create new RefCount message
-	refCountData := make([]byte, 5)
-	refCountData[0] = 0 // message version
-	fw.file.sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)
-
-	// Add message to header
-	err := core.AddMessageToObjectHeader(oh, core.MsgRefCount, refCountData)
-	if err != nil {
-		return fmt.Errorf("failed to add RefCount message: %w", err)
+	if oh.ReferenceCount <= 1 {
+		return nil
 	}
-	return nil
+	return fw.appendHeaderMessage(addr, oh, core.MsgRefCount, data, fw.file.sb)
 }
 
 // CreateSoftLink creates a symbolic link to a path within the HDF5 file.

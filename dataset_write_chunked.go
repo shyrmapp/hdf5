@@ -313,21 +313,10 @@ func (dw *DatasetWriter) writeChunkedData(buf []byte) error {
 			return fmt.Errorf("failed to update B-tree address in layout message: %w", err)
 		}
 
-		// Recompute V2 object header Jenkins checksum after patching the B-tree address.
-		// The checksum covers all bytes from OHDR signature through messages (excluding
-		// the 4-byte checksum itself). Without this, h5dump rejects the header with
-		// "incorrect metadata checksum after all read attempts".
-		checksumSize := uint64(4)
-		dataLen := dw.headerSize - checksumSize
-		ohdrBuf := make([]byte, dataLen)
-		if _, readErr := dw.fileWriter.writer.Reader().ReadAt(ohdrBuf, int64(dw.address)); readErr != nil { //nolint:gosec // G115: address within file bounds
-			return fmt.Errorf("failed to read object header for checksum: %w", readErr)
-		}
-		newChecksum := core.JenkinsChecksum(ohdrBuf)
-		var csumBuf [4]byte
-		binary.LittleEndian.PutUint32(csumBuf[:], newChecksum)
-		if err := dw.fileWriter.writer.WriteAtAddress(csumBuf[:], dw.address+dataLen); err != nil {
-			return fmt.Errorf("failed to write object header checksum: %w", err)
+		// Recompute the checksum from the header's current chunk size: attributes
+		// written before the first Write may have grown it since creation.
+		if err := dw.fileWriter.refreshOHDRChecksum(dw.address); err != nil {
+			return fmt.Errorf("failed to refresh object header checksum: %w", err)
 		}
 	}
 

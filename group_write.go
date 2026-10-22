@@ -1023,33 +1023,50 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	return removedAddr, nil
 }
 
+// ohdrChunk0 returns, for a v2 object header at headerAddr, the offset of the
+// first message from the header start and the size of chunk 0's message area
+// (the checksum follows it).
+func (fw *FileWriter) ohdrChunk0(headerAddr uint64) (start, size int64, err error) {
+	var prefix [6]byte
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err = fw.writer.ReadAt(prefix[:], int64(headerAddr)); err != nil {
+		return 0, 0, err
+	}
+	if string(prefix[:4]) != "OHDR" {
+		return 0, 0, fmt.Errorf("no v2 object header at 0x%X", headerAddr)
+	}
+	width := int64(1) << (prefix[5] & 0x03)
+	start = 6 + timesAndPhaseLen(prefix[5]) + width
+	sizeBuf := make([]byte, 8)
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err = fw.writer.ReadAt(sizeBuf[:width], int64(headerAddr)+start-width); err != nil {
+		return 0, 0, err
+	}
+	return start, int64(binary.LittleEndian.Uint64(sizeBuf)), nil //nolint:gosec // G115: chunk size is small
+}
+
 // refreshOHDRChecksum recomputes the trailing Jenkins checksum of a v2 object
 // header after its bytes were patched in place. v1 headers have no checksum.
 func (fw *FileWriter) refreshOHDRChecksum(headerAddr uint64) error {
-	var prefix [6]byte
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(prefix[:], int64(headerAddr)); err != nil {
-		return err
+	start, size, err := fw.ohdrChunk0(headerAddr)
+	if err != nil {
+		return nil //nolint:nilerr // v1 headers have no checksum
 	}
-	if string(prefix[:4]) != "OHDR" {
-		return nil
-	}
-	width := 1 << (prefix[5] & 0x03)
-	sizeBuf := make([]byte, 8)
+	return fw.refreshChecksum(headerAddr, start+size)
+}
+
+// refreshChecksum rewrites the 4-byte Jenkins checksum that follows the n
+// bytes at addr (an OHDR chunk or an OCHK block).
+func (fw *FileWriter) refreshChecksum(addr uint64, n int64) error {
+	buf := make([]byte, n)
 	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(sizeBuf[:width], int64(headerAddr)+6+timesAndPhaseLen(prefix[5])); err != nil {
-		return err
-	}
-	total := 6 + timesAndPhaseLen(prefix[5]) + int64(width) + int64(binary.LittleEndian.Uint64(sizeBuf)) //nolint:gosec // G115: chunk size is small
-	buf := make([]byte, total)
-	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	if _, err := fw.writer.ReadAt(buf, int64(headerAddr)); err != nil {
+	if _, err := fw.writer.ReadAt(buf, int64(addr)); err != nil {
 		return err
 	}
 	var sum [4]byte
 	binary.LittleEndian.PutUint32(sum[:], core.JenkinsChecksum(buf))
 	//nolint:gosec // G115: HDF5 addresses fit in int64.
-	_, err := fw.writer.WriteAt(sum[:], int64(headerAddr)+total)
+	_, err := fw.writer.WriteAt(sum[:], int64(addr)+n)
 	return err
 }
 

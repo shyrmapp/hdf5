@@ -73,3 +73,60 @@ func TestCInterop_FloatAttributes(t *testing.T) {
 	require.Contains(t, out, "(0): 1, 2, 3")
 	require.Contains(t, out, "(0): 2.5")
 }
+
+func TestCInterop_HeaderGrowthAfterReopen(t *testing.T) {
+	fw, file := newWriteFile(t)
+	for i := 0; i < 3; i++ {
+		ds, err := fw.CreateDataset(fmt.Sprintf("/ds%d", i), Int32, []uint64{3})
+		require.NoError(t, err)
+		require.NoError(t, ds.Write([]int32{int32(i), 7, 8}))
+	}
+	require.NoError(t, fw.Close())
+
+	fw, err := OpenForWrite(file, OpenReadWrite)
+	require.NoError(t, err)
+	ds, err := fw.OpenDataset("/ds0")
+	require.NoError(t, err)
+	require.NoError(t, ds.WriteAttribute("note", strings.Repeat("n", 900)))
+	require.NoError(t, ds.WriteAttribute("note2", strings.Repeat("m", 900)))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, strings.Repeat("n", 900))
+	require.Contains(t, out, strings.Repeat("m", 900))
+	require.Contains(t, out, "(0): 1, 7, 8")
+	require.Contains(t, out, "(0): 2, 7, 8")
+}
+
+func TestCInterop_ChunkedAttributesAroundWrite(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/c", Int32, []uint64{10}, WithChunkDims([]uint64{5}))
+	require.NoError(t, err)
+	require.NoError(t, ds.WriteAttribute("before", strings.Repeat("b", 300)))
+	require.NoError(t, ds.Write([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	require.NoError(t, ds.WriteAttribute("after", strings.Repeat("a", 300)))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, "(0): 0, 1, 2, 3, 4, 5, 6, 7, 8, 9")
+	require.Contains(t, out, strings.Repeat("b", 300))
+	require.Contains(t, out, strings.Repeat("a", 300))
+}
+
+func TestCInterop_HardLinkThenSoftLink(t *testing.T) {
+	fw, file := newWriteFile(t)
+	_, err := fw.CreateGroup("/g")
+	require.NoError(t, err)
+	ds, err := fw.CreateDataset("/x", Int32, []uint64{2})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{4, 5}))
+	require.NoError(t, fw.CreateHardLink("/h0", "/x"))
+	require.NoError(t, fw.CreateHardLink("/h1", "/x"))
+	require.NoError(t, fw.CreateHardLink("/h2", "/x"))
+	require.NoError(t, fw.CreateSoftLink("/g/s", "/x"))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, `SOFTLINK "s"`)
+	require.Contains(t, out, `HARDLINK`)
+}

@@ -607,22 +607,29 @@ type FileWriter struct {
 	globalHeapWriter *globalHeapWriter
 }
 
-// lookupHeaderAllocSize returns the original allocation size for an object header
-// at the given address. Returns 0 if not tracked (e.g., for legacy files opened
-// with OpenForWrite, where we don't know the original allocation).
+// lookupHeaderAllocSize returns the allocation size of the object header at
+// objectAddr: the tracked size when this writer created it, otherwise the
+// extent of the first chunk as stored in the file (a lower bound of the real
+// allocation, so growing past it is always safe to route to a continuation
+// block). Returns 0 only when the header cannot be parsed.
 func (fw *FileWriter) lookupHeaderAllocSize(objectAddr uint64) uint64 {
-	// Check root group.
+	tracked := fw.headerAllocs[objectAddr]
 	if objectAddr == fw.rootGroupAddr {
-		return fw.rootHeaderAllocSz
+		tracked = fw.rootHeaderAllocSz
 	}
-	// Check non-root groups.
 	for _, meta := range fw.groups {
 		if meta.headerAddr == objectAddr {
-			return meta.headerAllocSz
+			tracked = meta.headerAllocSz
 		}
 	}
-	// Datasets and other tracked headers.
-	return fw.headerAllocs[objectAddr]
+	if tracked > 0 {
+		return tracked
+	}
+	start, size, err := fw.ohdrChunk0(objectAddr)
+	if err != nil {
+		return 0
+	}
+	return uint64(start+size) + 4 //nolint:gosec // G115: small non-negative values
 }
 
 // Superblock version constants for file creation.
