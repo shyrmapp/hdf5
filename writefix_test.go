@@ -1,0 +1,64 @@
+package hdf5
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestOpenDatasetChunkedRefusesDataWrite(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/c", Int32, []uint64{10}, WithChunkDims([]uint64{5}))
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	require.NoError(t, fw.Close())
+
+	fw, err = OpenForWrite(file, OpenReadWrite)
+	require.NoError(t, err)
+	ds, err = fw.OpenDataset("/c")
+	require.NoError(t, err)
+	require.Error(t, ds.Write([]int32{9, 9, 9, 9, 9, 9, 9, 9, 9, 9}))
+	require.Error(t, ds.WriteRaw(make([]byte, 40)))
+	require.NoError(t, ds.WriteAttribute("still", "fine"))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, "(0): 0, 1, 2, 3, 4, 5, 6, 7, 8, 9")
+}
+
+func TestUseAfterCloseReturnsError(t *testing.T) {
+	fw, _ := newWriteFile(t)
+	ds, err := fw.CreateDataset("/d", Int32, []uint64{1})
+	require.NoError(t, err)
+	g, err := fw.CreateGroup("/g")
+	require.NoError(t, err)
+	require.NoError(t, fw.Close())
+
+	require.Error(t, ds.Write([]int32{1}))
+	require.Error(t, ds.WriteAttribute("a", int32(1)))
+	require.Error(t, g.WriteAttribute("a", int32(1)))
+	_, err = fw.CreateDataset("/e", Int32, []uint64{1})
+	require.Error(t, err)
+	_, err = fw.CreateGroup("/h")
+	require.Error(t, err)
+	require.Error(t, fw.Delete("/d"))
+	require.NoError(t, fw.Close())
+}
+
+func TestStaleWriterAfterDelete(t *testing.T) {
+	fw, file := newWriteFile(t)
+	old, err := fw.CreateDataset("/old", Int32, []uint64{4})
+	require.NoError(t, err)
+	require.NoError(t, old.Write([]int32{1, 1, 1, 1}))
+	require.NoError(t, fw.Delete("/old"))
+	repl, err := fw.CreateDataset("/new", Int32, []uint64{4})
+	require.NoError(t, err)
+	require.NoError(t, repl.Write([]int32{7, 7, 7, 7}))
+
+	require.Error(t, old.Write([]int32{2, 2, 2, 2}))
+	require.Error(t, old.WriteAttribute("x", int32(1)))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, "(0): 7, 7, 7, 7")
+}

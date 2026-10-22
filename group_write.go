@@ -76,6 +76,9 @@ type GroupWriter struct {
 //   - Attributes cannot be modified after creation (write-once)
 //   - No attribute deletion
 func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
+	if err := g.file.checkOpen(); err != nil {
+		return err
+	}
 	// Delegate to existing attribute writing infrastructure
 	// This reuses the same code path as DatasetWriter.WriteAttribute
 	return writeAttribute(g.file, g.headerAddr, name, value)
@@ -101,6 +104,9 @@ func (g *GroupWriter) WriteAttribute(name string, value interface{}) error {
 //
 // Reference: H5Adelete.c - H5A__delete().
 func (g *GroupWriter) DeleteAttribute(name string) error {
+	if err := g.file.checkOpen(); err != nil {
+		return err
+	}
 	return deleteAttribute(g.file, g.headerAddr, name)
 }
 
@@ -213,6 +219,9 @@ func (fw *FileWriter) createGroupStructures() (uint64, uint64, uint64, error) {
 //   - Maximum 32 entries per group (symbol table node capacity)
 //   - Parent group must exist (create parents first)
 func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
 	// Validate path
 	if err := validateGroupPath(path); err != nil {
 		return nil, err
@@ -757,6 +766,9 @@ func (fw *FileWriter) readSymbolTableNode(addr uint64) (*structures.SymbolTableN
 //
 // Reference: H5Gcreate.c - H5Gcreate2().
 func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate name
 	if !strings.HasPrefix(name, "/") {
 		return fmt.Errorf("group name must start with /: %s", name)

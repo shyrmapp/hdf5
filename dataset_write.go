@@ -603,6 +603,9 @@ type FileWriter struct {
 	// of overwriting whatever follows.
 	headerAllocs map[uint64]uint64
 
+	// Dataset writers handed out, by header address, so Delete can invalidate them.
+	liveWriters map[uint64][]*DatasetWriter
+
 	// Global heap writer for variable-length data (vlen strings, ragged arrays)
 	globalHeapWriter *globalHeapWriter
 }
@@ -878,7 +881,15 @@ func calculateTotalElements(dims []uint64) uint64 {
 //   - Resizable datasets require chunked layout (use WithMaxDims with WithChunkDims)
 //
 //nolint:gocyclo,cyclop,gocognit,funlen // Complex by nature: dataset creation handles multiple layout types and options
-func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
+func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, opts ...DatasetOption) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
 		return nil, err
@@ -1057,7 +1068,15 @@ func (fw *FileWriter) CreateDataset(name string, dtype Datatype, dims []uint64, 
 // Reference: H5Dcreate2.c - H5D__create(), H5Tcompound.c - compound datatype handling.
 //
 //nolint:gocyclo,cyclop // Dataset creation requires validation and setup (complexity justified for public API)
-func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (*DatasetWriter, error) {
+func (fw *FileWriter) CreateCompoundDataset(name string, compoundType *core.DatatypeMessage, dims []uint64, opts ...DatasetOption) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Validate inputs
 	if err := validateDatasetName(name); err != nil {
 		return nil, err
@@ -1216,6 +1235,9 @@ type DatasetWriter struct {
 	// For RMW scenarios (files opened with OpenForWrite)
 	objectHeader  *core.ObjectHeader         // Full object header (for attribute operations)
 	denseAttrInfo *core.AttributeInfoMessage // Dense attribute storage info (nil if no dense storage)
+
+	deleted      bool  // the object was deleted; the writer must not touch its former space
+	dataWriteErr error // why raw data cannot be written (non-contiguous layout of an opened dataset)
 }
 
 // Write writes data to the dataset.
@@ -1243,6 +1265,9 @@ type DatasetWriter struct {
 //	// Flatten row-major: [[1,2,3,4], [5,6,7,8], [9,10,11,12]]
 //	ds2.Write([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 func (dw *DatasetWriter) Write(data interface{}) error {
+	if err := dw.writable(); err != nil {
+		return err
+	}
 	// Handle variable-length data separately (uses global heap)
 	if dw.dtype.Class == core.DatatypeVarLen {
 		return dw.writeVLen(data)
@@ -1307,6 +1332,9 @@ func (dw *DatasetWriter) Write(data interface{}) error {
 //	data := []byte{/* encoded struct bytes */}
 //	err := ds.WriteRaw(data)
 func (dw *DatasetWriter) WriteRaw(data []byte) error {
+	if err := dw.writable(); err != nil {
+		return err
+	}
 	// Verify size matches expected dataset size
 	if uint64(len(data)) != dw.dataSize {
 		return fmt.Errorf("data size mismatch: expected %d bytes, got %d bytes", dw.dataSize, len(data))
@@ -1539,6 +1567,9 @@ func (dw *DatasetWriter) writeVLen(data interface{}) error {
 //
 //nolint:gocyclo,cyclop // Complex by nature: resize involves validation, header update, and state management
 func (dw *DatasetWriter) Resize(newDims []uint64) error {
+	if err := dw.usable(); err != nil {
+		return err
+	}
 	// 1. Validate input.
 	if !dw.isChunked {
 		return fmt.Errorf("resize requires chunked layout")
@@ -2209,7 +2240,15 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 //	ds.WriteAttribute("units", "Celsius")  // Works with existing dense storage!
 //
 //nolint:gocognit,gocyclo,cyclop // Complex navigation logic with multiple object types and error paths
-func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
+func (fw *FileWriter) OpenDataset(path string) (outDW *DatasetWriter, outErr error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if outErr == nil {
+			fw.track(outDW)
+		}
+	}()
 	// Step 1: Navigate to dataset using file.Walk()
 	var foundDataset *Dataset
 	fw.file.Walk(func(p string, obj Object) {
@@ -2286,6 +2325,11 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 		dims:          dataspaceMsg.Dimensions,
 		objectHeader:  oh,          // Store object header for attribute operations
 		denseAttrInfo: attrInfoMsg, // May be nil if no dense storage yet
+	}
+	// shortcut: only contiguous datasets can be rewritten after OpenDataset; chunked/compact
+	// state is not reconstructed. Upgrade when RMW of chunked datasets is needed.
+	if layoutMsg.Class != core.LayoutContiguous || layoutMsg.DataAddress == undefinedAddress {
+		dsw.dataWriteErr = fmt.Errorf("dataset %q: writing data to an opened dataset requires contiguous layout with allocated storage", path)
 	}
 
 	return dsw, nil

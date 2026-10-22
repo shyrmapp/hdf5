@@ -42,6 +42,9 @@ const undefinedAddress = uint64(0xFFFFFFFFFFFFFFFF)
 //
 // Reference: H5Ldelete.c, H5G_obj_remove(), H5O_link(adjust=-1), H5O_delete().
 func (fw *FileWriter) Delete(path string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate path.
 	if path == "" {
 		return fmt.Errorf("delete: path cannot be empty")
@@ -99,6 +102,9 @@ func (fw *FileWriter) Delete(path string) error {
 
 	// Step 5: Remove from groups map if tracked.
 	delete(fw.groups, path)
+
+	// The object's space may be reused: stale writers must not touch it.
+	fw.markDeleted(objectAddr)
 
 	return nil
 }

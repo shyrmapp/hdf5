@@ -51,6 +51,9 @@ import (
 //
 // Reference: H5L.c - H5Lcreate_hard().
 func (fw *FileWriter) CreateHardLink(linkPath, targetPath string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate paths
 	if err := validateLinkPath(linkPath); err != nil {
 		return fmt.Errorf("invalid link path: %w", err)
@@ -222,6 +225,9 @@ func writeV2RefCount(fw *FileWriter, addr uint64, oh *core.ObjectHeader) error {
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 1 (Soft Link)
 // Reference: H5L.c - H5Lcreate_soft().
 func (fw *FileWriter) CreateSoftLink(linkPath, targetPath string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate paths
 	if err := validateLinkPath(linkPath); err != nil {
 		return fmt.Errorf("invalid link path: %w", err)
@@ -304,6 +310,9 @@ func validateSoftLinkTargetPath(path string) error {
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)
 // Reference: H5Lcreate_external() in H5L.c.
 func (fw *FileWriter) CreateExternalLink(linkPath, fileName, objectPath string) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	// Validate link path
 	if err := validateLinkPath(linkPath); err != nil {
 		return fmt.Errorf("invalid link path: %w", err)

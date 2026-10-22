@@ -50,6 +50,9 @@ const (
 // Limitations:
 //   - No compound types
 func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
+	if err := ds.usable(); err != nil {
+		return err
+	}
 	// For datasets opened with OpenForWrite, use cached object header and dense attr info
 	if ds.objectHeader != nil {
 		return writeAttributeWithCachedHeader(ds.fileWriter, ds.address, ds.objectHeader, ds.denseAttrInfo, name, value)
@@ -73,6 +76,9 @@ func (ds *DatasetWriter) WriteAttribute(name string, value interface{}) error {
 //
 // Reference: H5Adelete.c - H5A__delete(), H5Adense.c - H5A__dense_remove().
 func (ds *DatasetWriter) DeleteAttribute(name string) error {
+	if err := ds.usable(); err != nil {
+		return err
+	}
 	// For datasets opened with OpenForWrite, use cached object header and dense attr info
 	if ds.objectHeader != nil {
 		return deleteAttributeWithCachedHeader(ds.fileWriter, ds.address, ds.objectHeader, ds.denseAttrInfo, name)
