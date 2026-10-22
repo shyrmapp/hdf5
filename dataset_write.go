@@ -1561,56 +1561,30 @@ func (dw *DatasetWriter) Resize(newDims []uint64) error {
 		}
 	}
 
-	// 3. Read object header from file if not already loaded.
-	if dw.objectHeader == nil {
-		oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address,
-			dw.fileWriter.file.sb)
-		if err != nil {
-			return fmt.Errorf("read object header: %w", err)
-		}
-		dw.objectHeader = oh
+	// 3. Re-read the header: attributes, the layout's B-tree address and a
+	// continuation block may all have changed since this writer was created.
+	oh, err := core.ReadObjectHeader(dw.fileWriter.writer, dw.address, dw.fileWriter.file.sb)
+	if err != nil {
+		return fmt.Errorf("read object header: %w", err)
 	}
 
-	// 4. Find and update dataspace message.
-	var dataspaceMsg *core.DataspaceMessage
-	var dataspaceIdx int
-	found := false
-	for i, msg := range dw.objectHeader.Messages {
-		if msg.Type != core.MsgDataspace { // Skip non-dataspace messages
-			continue
-		}
-		// Found dataspace message.
-		ds, err := core.ParseDataspaceMessage(msg.Data)
-		if err != nil {
-			return fmt.Errorf("parse dataspace: %w", err)
-		}
-		dataspaceMsg = ds
-		dataspaceIdx = i
-		found = true
-		break
-	}
-
-	if !found {
-		return fmt.Errorf("dataspace message not found in object header")
-	}
-
-	// 5. Update dimensions.
-	dataspaceMsg.Dimensions = newDims
-
-	// 6. Re-encode dataspace message.
+	// 4. Patch only the dataspace message, in place.
 	newDataspaceData, err := core.EncodeDataspaceMessage(newDims, dw.maxDims)
 	if err != nil {
 		return fmt.Errorf("encode dataspace: %w", err)
 	}
-
-	// 7. Update message in object header.
-	dw.objectHeader.Messages[dataspaceIdx].Data = newDataspaceData
-
-	// 8. Write updated object header back to file.
-	err = core.WriteObjectHeader(dw.fileWriter.writer, dw.address,
-		dw.objectHeader, dw.fileWriter.file.sb)
-	if err != nil {
-		return fmt.Errorf("write object header: %w", err)
+	var dataspaceMsg *core.HeaderMessage
+	for _, msg := range oh.Messages {
+		if msg.Type == core.MsgDataspace {
+			dataspaceMsg = msg
+			break
+		}
+	}
+	if dataspaceMsg == nil {
+		return fmt.Errorf("dataspace message not found in object header")
+	}
+	if err := dw.fileWriter.patchHeaderMessage(dw.address, oh, dataspaceMsg, newDataspaceData); err != nil {
+		return fmt.Errorf("update dataspace: %w", err)
 	}
 
 	// 9. Update internal state.
