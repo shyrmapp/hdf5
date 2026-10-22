@@ -2119,6 +2119,13 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 
+	// The write path addresses the file absolutely; refuse rather than write at
+	// the wrong offsets.
+	if base := f.sb.BaseAddress; base != 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("files with a user block (base address %d) cannot be opened for writing", base)
+	}
+
 	// Step 2: Create low-level writer for RMW operations
 	var writerMode writer.CreateMode
 	if mode == OpenReadWrite {

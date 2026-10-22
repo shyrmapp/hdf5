@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 )
 
 // HDF5 file signature and supported superblock versions.
@@ -35,21 +36,49 @@ type Superblock struct {
 	RootHeapAddr  uint64 // Local heap address for root group (v0 only)
 }
 
+// ErrNoSignature reports that no HDF5 signature was found at any address the
+// format allows.
+var ErrNoSignature = errors.New("HDF5 signature not found")
+
+// locateSuperblock finds the signature at address 0 or at a power of two from
+// 512 on, as H5FD_locate_signature does. Any bytes before it are a user block.
+func locateSuperblock(r io.ReaderAt) (uint64, error) {
+	sig := make([]byte, len(Signature))
+	for addr := uint64(0); addr <= math.MaxInt64; {
+		if _, err := r.ReadAt(sig, int64(addr)); err != nil {
+			break // past the end of the file
+		}
+		if string(sig) == Signature {
+			return addr, nil
+		}
+		if addr == 0 {
+			addr = 512
+		} else {
+			addr <<= 1
+		}
+	}
+	return 0, ErrNoSignature
+}
+
 // ReadSuperblock reads and parses the HDF5 superblock from the file.
 // It supports versions 0, 2, and 3 of the superblock format.
+//
+// BaseAddress is set to the superblock's position: every other address in the
+// file is relative to it.
 func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
+	base, err := locateSuperblock(r)
+	if err != nil {
+		return nil, err
+	}
+
 	buf := make([]byte, 128)
 
-	n, err := r.ReadAt(buf, 0)
+	n, err := r.ReadAt(buf, int64(base)) //nolint:gosec // G115: base <= MaxInt64, checked by locateSuperblock
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("superblock read failed: %w", err)
 	}
 	if n < 48 {
 		return nil, errors.New("file too small to contain a superblock")
-	}
-
-	if string(buf[:8]) != Signature {
-		return nil, errors.New("invalid HDF5 signature")
 	}
 
 	version := buf[8]
@@ -90,7 +119,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 
 	// Helper function to read variable-sized values
 	readValue := func(offset int, size uint8) (uint64, error) {
-		if offset < 0 || offset+int(size) > len(buf) {
+		if offset < 0 || offset+int(size) > n {
 			return 0, fmt.Errorf("buffer overflow: offset=%d, size=%d", offset, size)
 		}
 
@@ -185,12 +214,9 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// The HDF5 C library also doesn't enforce checksum validation on read
 	}
 
-	// shortcut: addresses are used as absolute file offsets (osFile is a plain
-	// *os.File), so a non-zero base address cannot be honored; refuse it
-	// instead of reading garbage. Upgrade by wrapping the ReaderAt with an offset.
-	if sb.BaseAddress != 0 {
-		return nil, fmt.Errorf("non-zero superblock base address 0x%x is not supported", sb.BaseAddress)
-	}
+	// The stored base address is ignored in favor of where the superblock
+	// actually is, as the C library does (H5Fsuper.c).
+	sb.BaseAddress = base
 
 	return sb, nil
 }

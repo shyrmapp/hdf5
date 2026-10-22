@@ -484,7 +484,7 @@ func TestReadSuperblock_ParseErrors(t *testing.T) {
 			reader: func() *bytes.Reader {
 				return bytes.NewReader(make([]byte, 128))
 			},
-			wantErr: "invalid HDF5 signature",
+			wantErr: "HDF5 signature not found",
 		},
 		{
 			name: "unsupported version",
@@ -537,5 +537,5 @@ func TestReadSuperblock_ReadError(t *testing.T) {
 	sb, err := ReadSuperblock(&failingReaderAt{})
 	require.Error(t, err)
 	require.Nil(t, sb)
-	require.Contains(t, err.Error(), "superblock read failed")
+	require.ErrorIs(t, err, ErrNoSignature)
 }
