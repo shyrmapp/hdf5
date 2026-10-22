@@ -373,3 +373,24 @@ func (dl *DataLayoutMessage) String() string {
 		return layoutUnknown
 	}
 }
+
+// ValidateChunkDims checks a chunked layout's dimensions against the dataset:
+// one entry per dataspace dimension plus the trailing element-size
+// pseudo-dimension, none zero, and (when elemSize != 0) that pseudo-dimension
+// equal to the datatype size. Chunk dimensions are untrusted file input; a
+// zero or missing one otherwise reaches a division or an index expression.
+func (dl *DataLayoutMessage) ValidateChunkDims(rank int, elemSize uint64) error {
+	if len(dl.ChunkSize) != rank+1 {
+		return fmt.Errorf("chunk layout has %d dimensions, want %d (dataset rank %d + element size)",
+			len(dl.ChunkSize), rank+1, rank)
+	}
+	for i, d := range dl.ChunkSize {
+		if d == 0 {
+			return fmt.Errorf("zero-size chunk dimension %d", i)
+		}
+	}
+	if elemSize != 0 && dl.ChunkSize[rank] != elemSize {
+		return fmt.Errorf("chunk element size %d does not match datatype size %d", dl.ChunkSize[rank], elemSize)
+	}
+	return nil
+}

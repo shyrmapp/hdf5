@@ -252,7 +252,13 @@ func benchmarkExtract(b *testing.B, extract func([]byte, []uint64, []uint64, []u
 		Stride: []uint64{1, 1}, Block: []uint64{1, 1},
 	}
 	out := make([]byte, band*dims[1]*es)
-	coords := findOverlappingChunks(sel, chunk, dims)
+	first, last := selectionChunkRange(sel, chunk, dims)
+	var coords [][]uint64
+	for y := first[0]; y <= last[0]; y++ {
+		for x := first[1]; x <= last[1]; x++ {
+			coords = append(coords, []uint64{y, x})
+		}
+	}
 	b.SetBytes(int64(len(out)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

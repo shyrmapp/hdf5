@@ -67,13 +67,22 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock, max
 		return []string{}, nil
 	}
 
+	// The []string result costs a 16-byte header per element on top of the
+	// raw bytes, whatever the string length.
+	if err := checkReadSize(totalElements, 16, maxBytes, "string dataset"); err != nil {
+		return nil, err
+	}
+
 	// 6. Read data based on layout type.
 	var rawData []byte
 
 	switch {
 	case layout.IsCompact():
 		// Data is stored directly in the layout message.
-		rawData = layout.CompactData
+		rawData, err = compactPayload(layout, totalElements, uint64(datatype.Size))
+		if err != nil {
+			return nil, err
+		}
 
 	case layout.IsContiguous():
 		// Data is stored contiguously at specific address.

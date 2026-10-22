@@ -26,8 +26,8 @@ type ChunkLocation struct {
 // Chunks that exist in the index but were never allocated (undefined address)
 // are omitted; callers treat missing chunks as fill value.
 func CollectChunksV4(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, sb *Superblock) ([]ChunkLocation, error) {
-	if len(layout.ChunkSize) == 0 {
-		return nil, errors.New("chunked layout without chunk dimensions")
+	if err := layout.ValidateChunkDims(len(dataspace.Dimensions), 0); err != nil {
+		return nil, err
 	}
 	if isUndefinedAddress(layout.DataAddress, sb.OffsetSize) {
 		// Index was never allocated: no chunks written yet.
@@ -187,8 +187,7 @@ func implicitChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, grid []uint6
 		return nil, err
 	}
 	// All chunks are stored contiguously, so they must fit in the file.
-	total, err := utils.SafeMultiply(n, chunkBytes)
-	if err != nil || total > blockLimit(r, layout.DataAddress) {
+	if n > blockLimit(r, layout.DataAddress)/max(chunkBytes, 1) {
 		return nil, fmt.Errorf("implicit chunk index: %d chunks of %d bytes do not fit in file", n, chunkBytes)
 	}
 	if _, known := readerSize(r); !known && n > maxUnsizedEntries {

@@ -73,11 +73,19 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, m
 	// Each VLen element is stored as a global heap reference:
 	//   heap_address (OffsetSize bytes) + object_index (4 bytes) + padding to 16 bytes.
 	// datatype.Size is 16 (heap ID size).
+	// The result costs a 24-byte slice header per element plus the copied
+	// payloads (counted below), on top of the raw heap IDs.
+	if err := checkReadSize(totalElements, 24, maxBytes, "vlen dataset"); err != nil {
+		return nil, err
+	}
 	var rawData []byte
 
 	switch {
 	case layout.IsCompact():
-		rawData = layout.CompactData
+		rawData, err = compactPayload(layout, totalElements, uint64(datatype.Size))
+		if err != nil {
+			return nil, err
+		}
 
 	case layout.IsContiguous():
 		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, nil)
@@ -114,6 +122,7 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, m
 
 	// Cache global heap collections to avoid re-reading the same collection.
 	heapCache := make(map[uint64]*GlobalHeapCollection)
+	var copied uint64 // payload bytes copied into result so far
 
 	for i := uint64(0); i < totalElements; i++ {
 		idStart := i * heapIDSize
@@ -155,6 +164,10 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, m
 		}
 
 		// Copy the data to avoid holding references to the heap collection buffer.
+		copied += uint64(len(obj.Data))
+		if err := checkReadSize(copied, 1, maxBytes, "vlen payloads"); err != nil {
+			return nil, err
+		}
 		data := make([]byte, len(obj.Data))
 		copy(data, obj.Data)
 		result[i] = data
