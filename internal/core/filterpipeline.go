@@ -316,18 +316,63 @@ func applyShuffle(data []byte, clientData []uint32) ([]byte, error) {
 	return result, nil
 }
 
-// applyFletcher32 verifies and strips Fletcher32 checksum.
+// applyFletcher32 verifies and strips the Fletcher32 checksum (the last 4
+// bytes of the stored chunk).
 func applyFletcher32(data []byte) ([]byte, error) {
 	if len(data) < 4 {
 		return nil, errors.New("data too short for Fletcher32 checksum")
 	}
+	payload, stored := data[:len(data)-4], data[len(data)-4:]
+	// The checksum is stored little-endian. Releases of this library up to
+	// v0.14 computed it differently (little-endian words, true mod 65535);
+	// accept that variant so their files stay readable.
+	sum := binary.LittleEndian.Uint32(stored)
+	if sum != fletcher32(payload) && sum != legacyFletcher32(payload) {
+		return nil, errors.New("fletcher32 checksum mismatch: chunk is corrupt")
+	}
+	return payload, nil
+}
 
-	// Fletcher32 checksum is appended at the end (4 bytes).
-	// The checksum is stripped without validation.
-	// In practice, file system and HDF5 library corruption is extremely rare.
-	// For production use, consider external file integrity checks (SHA256, etc.).
-	// Reference: https://docs.hdfgroup.org/hdf5/latest/group___h5_z.html
-	return data[:len(data)-4], nil
+// fletcher32 is H5_checksum_fletcher32: Fletcher-32 over big-endian 16-bit
+// words (an odd trailing byte is the high byte of a final word). The folding
+// reduction (x&0xffff)+(x>>16), not a true mod 65535, is part of the format:
+// the two differ when a sum lands on 65535.
+func fletcher32(data []byte) uint32 {
+	fold := func(x uint32) uint32 { return x&0xffff + x>>16 }
+	var sum1, sum2 uint32
+	words := len(data) / 2
+	for i := 0; words > 0; {
+		n := min(words, 360) // 360 words cannot overflow uint32
+		words -= n
+		for ; n > 0; n-- {
+			sum1 += uint32(data[i])<<8 | uint32(data[i+1])
+			sum2 += sum1
+			i += 2
+		}
+		sum1, sum2 = fold(sum1), fold(sum2)
+	}
+	if len(data)%2 != 0 {
+		sum1 += uint32(data[len(data)-1]) << 8
+		sum2 += sum1
+		sum1, sum2 = fold(sum1), fold(sum2)
+	}
+	sum1, sum2 = fold(sum1), fold(sum2)
+	return sum2<<16 | sum1
+}
+
+// legacyFletcher32 is the variant earlier releases of this library wrote.
+func legacyFletcher32(data []byte) uint32 {
+	var sum1, sum2 uint32
+	i := 0
+	for ; i+1 < len(data); i += 2 {
+		sum1 = (sum1 + (uint32(data[i]) | uint32(data[i+1])<<8)) % 65535
+		sum2 = (sum2 + sum1) % 65535
+	}
+	if i < len(data) {
+		sum1 = (sum1 + uint32(data[i])) % 65535
+		sum2 = (sum2 + sum1) % 65535
+	}
+	return sum2<<16 | sum1
 }
 
 // applyBZIP2 decompresses BZIP2-compressed data.

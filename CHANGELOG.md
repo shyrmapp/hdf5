@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hostile chunked and compact datasets are refused instead of panicking or
+  over-allocating.** Chunk dimensions are validated once (one per dataspace
+  dimension plus the element size, none zero, element size equal to the
+  datatype's); a zero or missing one used to divide by zero or index out of
+  range, and an implicit chunk index with a zero element size allocated an
+  entry per declared chunk. `WithMaxReadBytes` now covers what the result
+  costs (16 B per string or complex128, 24 B per variable-length element plus
+  its copied payload), and compact data must hold the declared element count.
+  `ReadSlice` walks the stored chunk index rather than every grid coordinate.
+- **Fletcher32 checksums are verified** (a corrupt chunk is an error, not
+  silently stripped). Files written by earlier releases of this library, which
+  computed a non-standard checksum, still read.
+- **`ReadSlice` and `Read` share one chunk decoder.** Partial edge chunks
+  stored unfiltered (`DONT_FILTER_PARTIAL_CHUNKS`) are no longer run through
+  the filter pipeline, the decompression bound is the chunk size rather than
+  element-size times that, and a chunk that decodes short is an error.
 - **Dense attributes are read.** The Attribute Info message was matched as
   type 0x000F (Shared Message Table) instead of 0x0015, and its optional
   creation-order field was parsed as 4 bytes instead of 2, so every object with

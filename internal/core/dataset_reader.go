@@ -45,6 +45,9 @@ func ReadDatasetComplex(r io.ReaderAt, header *ObjectHeader, sb *Superblock, max
 	if base, baseErr := ParseDatatypeMessage(datatype.Properties); baseErr == nil && base.Class == DatatypeFloat {
 		byteOrder = base.GetByteOrder()
 	}
+	if err := checkReadSize(totalElements, 16, maxBytes, "complex dataset"); err != nil {
+		return nil, err
+	}
 	result := make([]complex128, totalElements)
 	switch datatype.Size {
 	case 16: // float64 parts
@@ -141,7 +144,10 @@ func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxByte
 	switch {
 	case layout.IsCompact():
 		// Data is stored directly in the layout message.
-		rawData = layout.CompactData
+		rawData, err = compactPayload(layout, totalElements, uint64(datatype.Size))
+		if err != nil {
+			return nil, nil, 0, err
+		}
 
 	case layout.IsContiguous():
 		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, FillValueBytes(header, datatype.Size))
@@ -371,6 +377,10 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 		return nil, err
 	}
 
+	if err := layout.ValidateChunkDims(len(dataspace.Dimensions), elementSize); err != nil {
+		return nil, err
+	}
+
 	// Allocate output buffer.
 	rawData := make([]byte, totalBytes)
 	fillBuffer(rawData, fill) // chunks never written read as the fill value
@@ -398,25 +408,9 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	}
 
 	for _, chunk := range chunks {
-		// CVE-2025-7067 fix: Validate chunk size before allocation to prevent buffer overflow.
-		if err := utils.ValidateBufferSize(chunk.NBytes, utils.MaxChunkSize, "chunk data"); err != nil {
-			return nil, fmt.Errorf("invalid chunk size at 0x%x: %w", chunk.Address, err)
-		}
-
-		// Read chunk data.
-		chunkData := make([]byte, chunk.NBytes)
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := r.ReadAt(chunkData, int64(chunk.Address))
+		chunkData, err := ReadChunk(r, layout, filterPipeline, chunk, actualChunkDims, dataDims, chunkBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunk.Address, err)
-		}
-
-		// Apply filters (decompression, etc) if present.
-		if filterPipeline != nil && !chunkStoredUnfiltered(layout, chunk, actualChunkDims, dataDims) {
-			chunkData, err = filterPipeline.ApplyFilters(chunkData, chunk.FilterMask, chunkBytes)
-			if err != nil {
-				return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
-			}
+			return nil, err
 		}
 
 		// Calculate where this chunk goes in the output array.
@@ -431,11 +425,45 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	return rawData, nil
 }
 
+// ReadChunk reads one chunk's stored bytes and decodes them (filter pipeline
+// unless the chunk was stored raw), returning exactly one full chunk. chunkDims
+// are the rank-trimmed chunk dimensions and chunkBytes their size in bytes; the
+// latter bounds the decompressed size, and a chunk that decodes shorter is an
+// error rather than silently partial data. Shared by the whole-dataset and
+// hyperslab readers so they cannot diverge.
+func ReadChunk(r io.ReaderAt, layout *DataLayoutMessage, filterPipeline *FilterPipelineMessage, chunk ChunkLocation, chunkDims, dataDims []uint64, chunkBytes uint64) ([]byte, error) {
+	// CVE-2025-7067 fix: Validate chunk size before allocation to prevent buffer overflow.
+	if err := utils.ValidateBufferSize(chunk.NBytes, utils.MaxChunkSize, "chunk data"); err != nil {
+		return nil, fmt.Errorf("invalid chunk size at 0x%x: %w", chunk.Address, err)
+	}
+
+	chunkData := make([]byte, chunk.NBytes)
+	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
+	if _, err := r.ReadAt(chunkData, int64(chunk.Address)); err != nil {
+		return nil, fmt.Errorf("failed to read chunk at 0x%x: %w", chunk.Address, err)
+	}
+
+	if filterPipeline != nil && !chunkStoredUnfiltered(layout, chunk, chunkDims, dataDims) {
+		var err error
+		chunkData, err = filterPipeline.ApplyFilters(chunkData, chunk.FilterMask, chunkBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply filters to chunk at 0x%x: %w", chunk.Address, err)
+		}
+	}
+	if uint64(len(chunkData)) < chunkBytes {
+		return nil, fmt.Errorf("chunk at 0x%x holds %d bytes, want %d", chunk.Address, len(chunkData), chunkBytes)
+	}
+	return chunkData, nil
+}
+
 // CollectChunks lists all allocated chunks of a chunked dataset, dispatching
 // on the layout message version: v3 walks the v1 B-tree, v4/v5 walk the chunk
 // index named in the message. Scaled coordinates are trimmed to the dataset
 // rank in both cases.
 func CollectChunks(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, sb *Superblock) ([]ChunkLocation, error) {
+	if err := layout.ValidateChunkDims(len(dataspace.Dimensions), 0); err != nil {
+		return nil, err
+	}
 	if layout.Version >= 4 {
 		return CollectChunksV4(r, layout, dataspace, sb)
 	}
@@ -664,6 +692,19 @@ func readContiguousData(r io.ReaderAt, addr, totalElements, elementSize, maxByte
 		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 	}
 	return rawData, nil
+}
+
+// compactPayload returns a compact layout's inline data after checking it can
+// hold the declared element count. Compact data lives in the object header, so
+// it is never subject to the file-size probe contiguous data gets; without this
+// a few bytes of payload could declare millions of elements for the typed
+// converters to allocate for.
+func compactPayload(layout *DataLayoutMessage, totalElements, elemSize uint64) ([]byte, error) {
+	if elemSize != 0 && totalElements > uint64(len(layout.CompactData))/elemSize {
+		return nil, fmt.Errorf("compact dataset declares %d elements of %d bytes but stores %d bytes",
+			totalElements, elemSize, len(layout.CompactData))
+	}
+	return layout.CompactData, nil
 }
 
 // DefaultMaxReadBytes bounds a single whole-dataset read to 1 GiB.

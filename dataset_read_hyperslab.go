@@ -2,7 +2,6 @@ package hdf5
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/shyrmapp/hdf5/internal/core"
 	"github.com/shyrmapp/hdf5/internal/utils"
@@ -466,7 +465,11 @@ func (d *Dataset) readHyperslabChunked(
 ) (interface{}, error) {
 	elementSize := uint64(datatype.Size)
 	dims := dataspace.Dimensions
-	chunkDims := layout.ChunkSize
+	if err := layout.ValidateChunkDims(len(dims), elementSize); err != nil {
+		return nil, err
+	}
+	// Drop the trailing element-size pseudo-dimension.
+	chunkDims := layout.ChunkSize[:len(dims)]
 
 	// Calculate output size
 	outputElements := calculateHyperslabOutputSize(selection)
@@ -474,12 +477,14 @@ func (d *Dataset) readHyperslabChunked(
 		return []float64{}, nil
 	}
 
-	// Find which chunks overlap with the selection
-	overlappingChunks := findOverlappingChunks(selection, chunkDims, dims)
-
-	if len(overlappingChunks) == 0 {
-		// No chunks overlap (empty selection)
-		return []float64{}, nil
+	// An HDF5 chunk is fixed-size, edge chunks included, so this is exactly
+	// what a chunk must decode to. It bounds the filter pipeline.
+	chunkBytes := elementSize
+	for _, cd := range chunkDims {
+		var err error
+		if chunkBytes, err = utils.SafeMultiply(chunkBytes, cd); err != nil {
+			return nil, fmt.Errorf("chunk size overflow: %w", err)
+		}
 	}
 
 	// Collect chunk locations from the layout's chunk index (v1 B-tree for
@@ -489,185 +494,58 @@ func (d *Dataset) readHyperslabChunked(
 		return nil, fmt.Errorf("failed to get chunk index: %w", err)
 	}
 
-	// Build chunk index (scaled coordinates -> file address)
-	chunkIndex := make(map[string]chunkIndexEntry)
-	for _, chunk := range allChunks {
-		key := chunkCoordsToKey(chunk.Scaled[:len(dims)])
-		chunkIndex[key] = chunkIndexEntry{
-			address:    chunk.Address,
-			nbytes:     chunk.NBytes,
-			filterMask: chunk.FilterMask,
-		}
-	}
-
 	// Allocate output buffer
 	outputData := make([]byte, outputElements*elementSize)
 	core.FillBuffer(outputData, fill) // chunks never written read as the fill value
 
-	// Read each overlapping chunk and extract relevant data. Each element
-	// is placed at the output offset computed from its coordinates (see
-	// extractChunkPortionRecursive), NOT a running counter — the chunks are
-	// visited in chunk-grid order, which is not the selection's row-major
-	// order whenever a chunk is narrower than the selection, and a missing
-	// sparse chunk would otherwise shift every later element.
-	for _, chunkCoord := range overlappingChunks {
-		err := d.extractFromChunk(
-			chunkCoord, chunkIndex, chunkDims, dims,
-			selection, datatype, filterPipeline,
-			outputData,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract from chunk %v: %w", chunkCoord, err)
+	// Visit the stored chunks inside the selection's chunk-grid box. Walking
+	// the index (whose size the file bounds) instead of enumerating every grid
+	// coordinate keeps the cost independent of how sparse the dataset is.
+	// Each element is placed at the output offset computed from its
+	// coordinates (see extractChunkPortion), NOT a running counter: chunks
+	// arrive in index order, which is not the selection's row-major order,
+	// and a missing sparse chunk would otherwise shift every later element.
+	first, last := selectionChunkRange(selection, chunkDims, dims)
+	for _, chunk := range allChunks {
+		if !chunkInRange(chunk.Scaled, first, last) {
+			continue
 		}
+		chunkData, err := core.ReadChunk(d.file.reader, layout, filterPipeline, chunk, chunkDims, dims, chunkBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract from chunk %v: %w", chunk.Scaled, err)
+		}
+		extractChunkPortion(chunkData, chunk.Scaled, chunkDims, dims, selection, elementSize, outputData)
 	}
 
 	// Convert bytes to float64
 	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
 }
 
-// chunkIndexEntry stores chunk location information.
-type chunkIndexEntry struct {
-	address    uint64
-	nbytes     uint64
-	filterMask uint32
-}
-
-// findOverlappingChunks identifies all chunks that overlap with the hyperslab selection.
-// Returns chunk coordinates (scaled chunk indices, not element indices).
-func findOverlappingChunks(sel *HyperslabSelection, chunkDims, datasetDims []uint64) [][]uint64 {
-	ndims := len(sel.Start)
-
-	// Calculate first and last chunk indices for each dimension
-	firstChunk := make([]uint64, ndims)
-	lastChunk := make([]uint64, ndims)
-
-	for i := 0; i < ndims; i++ {
-		// First chunk containing start of selection
-		firstChunk[i] = sel.Start[i] / chunkDims[i]
-
-		// Last chunk containing end of selection
-		// End position = start + (count-1)*stride + block - 1
+// selectionChunkRange returns, per dimension, the first and last chunk-grid
+// index the selection touches.
+func selectionChunkRange(sel *HyperslabSelection, chunkDims, datasetDims []uint64) (first, last []uint64) {
+	first = make([]uint64, len(chunkDims))
+	last = make([]uint64, len(chunkDims))
+	for i := range chunkDims {
+		first[i] = sel.Start[i] / chunkDims[i]
+		// End position = start + (count-1)*stride + block - 1, clamped to the dataset.
 		endPos := sel.Start[i] + (sel.Count[i]-1)*sel.Stride[i] + sel.Block[i] - 1
-
-		// Ensure we don't go beyond dataset bounds
 		if endPos >= datasetDims[i] {
 			endPos = datasetDims[i] - 1
 		}
-
-		lastChunk[i] = endPos / chunkDims[i]
+		last[i] = endPos / chunkDims[i]
 	}
-
-	// Generate all combinations of chunk coordinates
-	return generateChunkCoordinates(firstChunk, lastChunk)
+	return first, last
 }
 
-// generateChunkCoordinates generates all chunk coordinates in the range [first, last].
-func generateChunkCoordinates(first, last []uint64) [][]uint64 {
-	ndims := len(first)
-	if ndims == 0 {
-		return nil
-	}
-
-	// Calculate total number of chunks
-	totalChunks := 1
-	for i := 0; i < ndims; i++ {
-		totalChunks *= int(last[i] - first[i] + 1) //nolint:gosec // G115: chunk count bounded by dataset dimensions
-	}
-
-	result := make([][]uint64, 0, totalChunks)
-	current := make([]uint64, ndims)
-	copy(current, first)
-
-	// Recursively generate coordinates
-	generateChunkCoordsRecursive(first, last, current, 0, &result)
-
-	return result
-}
-
-// generateChunkCoordsRecursive recursively generates chunk coordinates.
-func generateChunkCoordsRecursive(first, last, current []uint64, dim int, result *[][]uint64) {
-	ndims := len(first)
-
-	if dim == ndims {
-		// Base case: copy current coordinate to result
-		coord := make([]uint64, ndims)
-		copy(coord, current)
-		*result = append(*result, coord)
-		return
-	}
-
-	// Iterate through range for this dimension
-	for i := first[dim]; i <= last[dim]; i++ {
-		current[dim] = i
-		generateChunkCoordsRecursive(first, last, current, dim+1, result)
-	}
-}
-
-// chunkCoordsToKey converts chunk coordinates to a string key for map lookup.
-func chunkCoordsToKey(coords []uint64) string {
-	// Simple string representation: "x,y,z"
-	parts := make([]string, len(coords))
-	for i, c := range coords {
-		parts[i] = fmt.Sprintf("%d", c)
-	}
-	return strings.Join(parts, ",")
-}
-
-// extractFromChunk reads a single chunk, decompresses if needed, and extracts relevant portion.
-func (d *Dataset) extractFromChunk(
-	chunkCoord []uint64,
-	chunkIndex map[string]chunkIndexEntry,
-	chunkDims []uint64,
-	datasetDims []uint64,
-	selection *HyperslabSelection,
-	datatype *core.DatatypeMessage,
-	filterPipeline *core.FilterPipelineMessage,
-	outputData []byte,
-) error {
-	// Look up chunk address
-	key := chunkCoordsToKey(chunkCoord)
-	chunkInfo, exists := chunkIndex[key]
-	if !exists {
-		// Sparse chunk: the caller pre-filled the output with the fill value.
-		return nil
-	}
-
-	elementSize := uint64(datatype.Size)
-
-	if err := utils.ValidateBufferSize(chunkInfo.nbytes, utils.MaxChunkSize, "chunk data"); err != nil {
-		return fmt.Errorf("invalid chunk size: %w", err)
-	}
-
-	// Read chunk data (use nbytes from index)
-	chunkData := make([]byte, chunkInfo.nbytes)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.reader.ReadAt(chunkData, int64(chunkInfo.address))
-	if err != nil {
-		return fmt.Errorf("failed to read chunk data: %w", err)
-	}
-
-	// Decompress if needed (using existing FilterPipelineMessage.ApplyFilters).
-	// An HDF5 chunk is fixed-size, so this is exactly what it must decompress
-	// to; it bounds the pipeline against compression bombs.
-	chunkBytes := elementSize
-	for _, cd := range chunkDims {
-		chunkBytes *= cd
-	}
-	if filterPipeline != nil {
-		chunkData, err = filterPipeline.ApplyFilters(chunkData, chunkInfo.filterMask, chunkBytes)
-		if err != nil {
-			return fmt.Errorf("failed to apply filters: %w", err)
+// chunkInRange reports whether scaled lies in the box [first, last].
+func chunkInRange(scaled, first, last []uint64) bool {
+	for i, c := range scaled {
+		if c < first[i] || c > last[i] {
+			return false
 		}
 	}
-
-	// Extract portion of this chunk that intersects with selection
-	extractChunkPortion(
-		chunkData, chunkCoord, chunkDims, datasetDims,
-		selection, elementSize,
-		outputData,
-	)
-
-	return nil
+	return true
 }
 
 // extractChunkPortion copies the part of one decoded chunk that intersects

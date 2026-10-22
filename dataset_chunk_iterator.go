@@ -105,6 +105,10 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 		return nil, fmt.Errorf("failed to parse dataspace: %w", err)
 	}
 
+	if err := layout.ValidateChunkDims(len(dataspace.Dimensions), 0); err != nil {
+		return nil, err
+	}
+
 	// Get chunk coordinates from B-tree.
 	chunkCoords, err := d.collectChunkCoordinates(layout, dataspace)
 	if err != nil {
