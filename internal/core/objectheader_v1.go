@@ -69,9 +69,13 @@ func parseV1Header(r io.ReaderAt, headerAddr uint64, sb *Superblock) ([]*HeaderM
 	// Process continuation messages
 	// We need to iterate through messages and follow any continuations
 	continuations := findContinuations(messages, sb)
+	tracker := newContTracker(r)
 	for len(continuations) > 0 {
 		cont := continuations[0]
 		continuations = continuations[1:]
+		if err := tracker.visit(cont); err != nil {
+			return nil, "", 0, err
+		}
 
 		// Parse continuation block
 		contMessages, contName, err := parseV1ContinuationBlock(r, cont.Address, cont.Size, sb)

@@ -35,6 +35,8 @@ func TestReadObjectHeader(t *testing.T) {
 		0x00, 't', 'e', 's', 't',
 	}
 
+	data = binary.LittleEndian.AppendUint32(data, JenkinsChecksum(data))
+
 	sb := &Superblock{
 		Endianness: binary.LittleEndian,
 	}

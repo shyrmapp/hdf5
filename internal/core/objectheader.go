@@ -248,6 +248,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	}
 
 	current += uint64(chunkSizeBytes)
+	if chunkSize > maxHeaderBlock || chunkSize+4 > blockLimit(r, current) {
+		return nil, "", fmt.Errorf("object header chunk size %d exceeds file or limit", chunkSize)
+	}
 	// Per HDF5 C reference (H5Ocache.c:1207, H5Opkg.h:85-107):
 	// chunk_size in file = message data ONLY (does not include checksum).
 	// The 4-byte Jenkins lookup3 checksum follows immediately after the messages.
@@ -260,6 +263,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	msgHeaderSize := uint64(4)
 	if flags&0x04 != 0 {
 		msgHeaderSize = 6
+	}
+
+	if err := verifyBlockChecksum(r, headerAddr, end+4, "OHDR"); err != nil {
+		return nil, "", err
 	}
 
 	for current < end {
@@ -313,9 +320,13 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	// message data (address + size), but V2 OCHK blocks have a different layout.
 	if sb != nil {
 		continuations := findContinuations(messages, sb)
+		tracker := newContTracker(r)
 		for len(continuations) > 0 {
 			cont := continuations[0]
 			continuations = continuations[1:]
+			if err := tracker.visit(cont); err != nil {
+				return nil, "", err
+			}
 
 			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
 			if err != nil {
@@ -362,6 +373,10 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	}
 	if string(sigBuf) != "OCHK" {
 		return nil, "", fmt.Errorf("invalid OCHK signature: % x", sigBuf)
+	}
+
+	if err := verifyBlockChecksum(r, blockAddr, blockAddr+blockSize, "OCHK"); err != nil {
+		return nil, "", err
 	}
 
 	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).

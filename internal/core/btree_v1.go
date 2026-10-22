@@ -190,8 +190,14 @@ type ChunkEntry struct {
 }
 
 // CollectAllChunks recursively collects all chunks from B-tree.
-// This handles both leaf and non-leaf nodes.
+// This handles both leaf and non-leaf nodes. Child levels must decrease by
+// exactly one and no node may be visited twice, so hostile files cannot
+// cause unbounded recursion.
 func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64) ([]ChunkEntry, error) {
+	return node.collectChunks(r, offsetSize, chunkDims, map[uint64]bool{})
+}
+
+func (node *BTreeV1Node) collectChunks(r io.ReaderAt, offsetSize uint8, chunkDims []uint64, visited map[uint64]bool) ([]ChunkEntry, error) {
 	ndims := len(chunkDims)
 	var chunks []ChunkEntry
 
@@ -207,18 +213,23 @@ func (node *BTreeV1Node) CollectAllChunks(r io.ReaderAt, offsetSize uint8, chunk
 	}
 
 	// Non-leaf node: children point to other B-tree nodes.
-	// Recursively collect chunks from all child nodes.
 	for i := 0; i < int(node.EntriesUsed); i++ {
 		childAddr := node.Children[i]
+		if visited[childAddr] {
+			return nil, fmt.Errorf("b-tree cycle: node at 0x%x visited twice", childAddr)
+		}
+		visited[childAddr] = true
 
-		// Parse child node.
 		childNode, err := ParseBTreeV1Node(r, childAddr, offsetSize, ndims, chunkDims)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse child node at 0x%x: %w", childAddr, err)
 		}
+		if childNode.NodeLevel != node.NodeLevel-1 {
+			return nil, fmt.Errorf("b-tree child at 0x%x has level %d, expected %d",
+				childAddr, childNode.NodeLevel, node.NodeLevel-1)
+		}
 
-		// Recursively collect chunks from child.
-		childChunks, err := childNode.CollectAllChunks(r, offsetSize, chunkDims)
+		childChunks, err := childNode.collectChunks(r, offsetSize, chunkDims, visited)
 		if err != nil {
 			return nil, fmt.Errorf("failed to collect chunks from child at 0x%x: %w", childAddr, err)
 		}

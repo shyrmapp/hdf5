@@ -679,7 +679,7 @@ func (fw *FileWriter) rewriteSymbolTableMessage(headerAddr, btreeAddr, heapAddr 
 				if _, writeErr := fw.writer.WriteAt(stMsg, int64(headerAddr)+int64(i)); writeErr != nil {
 					return fmt.Errorf("rewrite symbol table message: %w", writeErr)
 				}
-				return nil
+				return fw.refreshOHDRChecksum(headerAddr)
 			}
 		}
 	}
@@ -1016,4 +1016,46 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	}
 
 	return removedAddr, nil
+}
+
+// refreshOHDRChecksum recomputes the trailing Jenkins checksum of a v2 object
+// header after its bytes were patched in place. v1 headers have no checksum.
+func (fw *FileWriter) refreshOHDRChecksum(headerAddr uint64) error {
+	var prefix [6]byte
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err := fw.writer.ReadAt(prefix[:], int64(headerAddr)); err != nil {
+		return err
+	}
+	if string(prefix[:4]) != "OHDR" {
+		return nil
+	}
+	width := 1 << (prefix[5] & 0x03)
+	sizeBuf := make([]byte, 8)
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err := fw.writer.ReadAt(sizeBuf[:width], int64(headerAddr)+6+timesAndPhaseLen(prefix[5])); err != nil {
+		return err
+	}
+	total := 6 + timesAndPhaseLen(prefix[5]) + int64(width) + int64(binary.LittleEndian.Uint64(sizeBuf)) //nolint:gosec // G115: chunk size is small
+	buf := make([]byte, total)
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	if _, err := fw.writer.ReadAt(buf, int64(headerAddr)); err != nil {
+		return err
+	}
+	var sum [4]byte
+	binary.LittleEndian.PutUint32(sum[:], core.JenkinsChecksum(buf))
+	//nolint:gosec // G115: HDF5 addresses fit in int64.
+	_, err := fw.writer.WriteAt(sum[:], int64(headerAddr)+total)
+	return err
+}
+
+// timesAndPhaseLen is the size of the optional OHDR time and phase-change fields.
+func timesAndPhaseLen(flags byte) int64 {
+	var n int64
+	if flags&0x20 != 0 {
+		n += 16
+	}
+	if flags&0x10 != 0 {
+		n += 4
+	}
+	return n
 }
