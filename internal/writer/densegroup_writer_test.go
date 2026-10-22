@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/structures"
 )
 
 // TestDenseGroupWriter_Creation tests basic creation.
@@ -362,57 +363,23 @@ func TestDenseGroupWriter_UTF8Names(t *testing.T) {
 	t.Logf("Unicode test: %d links with various scripts", len(unicodeLinks))
 }
 
-// TestDenseGroupWriter_LinkMessage tests link message creation.
+// TestDenseGroupWriter_LinkMessage checks the encoded link parses back as a hard link.
 func TestDenseGroupWriter_LinkMessage(t *testing.T) {
 	dgw := NewDenseGroupWriter("/test")
 	sb := createTestSuperblock()
 
-	link := denseLink{
-		name:       "testlink",
-		targetAddr: 0x123456,
+	msg, err := dgw.createLinkMessage(denseLink{name: "testlink", targetAddr: 0x123456}, sb)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	msg := dgw.createLinkMessage(link, sb)
-
-	// Verify message is not empty
-	if len(msg) == 0 {
-		t.Error("Link message is empty")
+	got, err := structures.ParseLinkMessage(msg, sb)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
 	}
-
-	// Verify version (first byte should be 1)
-	if msg[0] != 1 {
-		t.Errorf("Link message version mismatch: got %d, want 1", msg[0])
+	if got.Name != "testlink" || got.Type != structures.LinkTypeHard || got.ObjectAddress != 0x123456 {
+		t.Errorf("round trip mismatch: %+v", got)
 	}
-
-	// Verify type (second byte should be 0 for hard link)
-	if msg[1] != 0 {
-		t.Errorf("Link type mismatch: got %d, want 0 (hard link)", msg[1])
-	}
-
-	// Verify flags (third byte should have character set bit set)
-	if msg[2]&0x04 == 0 {
-		t.Error("Character set flag not set")
-	}
-
-	// Verify encoding (fourth byte should be 0 for UTF-8)
-	if msg[3] != 0 {
-		t.Errorf("Character encoding mismatch: got %d, want 0 (UTF-8)", msg[3])
-	}
-
-	// Verify message contains link name
-	linkNameBytes := []byte("testlink")
-	found := false
-	for i := 0; i < len(msg)-len(linkNameBytes); i++ {
-		if string(msg[i:i+len(linkNameBytes)]) == "testlink" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("Link name not found in message")
-	}
-
-	t.Logf("Link message size: %d bytes", len(msg))
 }
 
 // TestDenseGroupWriter_ObjectHeader tests object header creation.
@@ -448,48 +415,6 @@ func TestDenseGroupWriter_ObjectHeader(t *testing.T) {
 	}
 
 	t.Logf("Object header written at 0x%x", addr)
-}
-
-// TestDenseGroupWriter_CompactUint64 tests compact uint64 encoding.
-func TestDenseGroupWriter_CompactUint64(t *testing.T) {
-	tests := []struct {
-		value    uint64
-		wantSize int
-	}{
-		{0, 1},
-		{1, 1},
-		{255, 1},
-		{256, 2},
-		{65535, 2},
-		{65536, 3},
-		{16777215, 3},
-		{16777216, 4},
-		{4294967295, 4},
-		{4294967296, 5},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("value_%d", tt.value), func(t *testing.T) {
-			size := compactUint64Size(tt.value)
-			if size != tt.wantSize {
-				t.Errorf("compactUint64Size(%d) = %d, want %d", tt.value, size, tt.wantSize)
-			}
-
-			// Test encoding
-			buf := make([]byte, size)
-			encodeCompactUint64(buf, tt.value)
-
-			// Decode and verify
-			var decoded uint64
-			for i := 0; i < size; i++ {
-				decoded |= uint64(buf[i]) << (8 * i)
-			}
-
-			if decoded != tt.value {
-				t.Errorf("Encode/decode mismatch: encoded %d, decoded %d", tt.value, decoded)
-			}
-		})
-	}
 }
 
 // TestDenseGroupWriter_DataspaceMessage tests dataspace message creation.

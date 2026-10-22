@@ -177,67 +177,6 @@ func TestComputeOffsetSize(t *testing.T) {
 	}
 }
 
-// TestReadUint tests variable-length unsigned integer reading.
-func TestReadUint(t *testing.T) {
-	tests := []struct {
-		name       string
-		data       []byte
-		size       int
-		endianness binary.ByteOrder
-		want       uint64
-	}{
-		{
-			name:       "1 byte",
-			data:       []byte{0x42},
-			size:       1,
-			endianness: binary.LittleEndian,
-			want:       0x42,
-		},
-		{
-			name:       "2 bytes little-endian",
-			data:       []byte{0x34, 0x12},
-			size:       2,
-			endianness: binary.LittleEndian,
-			want:       0x1234,
-		},
-		{
-			name:       "2 bytes big-endian",
-			data:       []byte{0x12, 0x34},
-			size:       2,
-			endianness: binary.BigEndian,
-			want:       0x1234,
-		},
-		{
-			name:       "4 bytes little-endian",
-			data:       []byte{0x78, 0x56, 0x34, 0x12},
-			size:       4,
-			endianness: binary.LittleEndian,
-			want:       0x12345678,
-		},
-		{
-			name:       "8 bytes little-endian",
-			data:       []byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11},
-			size:       8,
-			endianness: binary.LittleEndian,
-			want:       0x1122334455667788,
-		},
-		{
-			name:       "insufficient data",
-			data:       []byte{0x12},
-			size:       4,
-			endianness: binary.LittleEndian,
-			want:       0, // Returns 0 when data too short
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := readUint(tt.data, tt.size, tt.endianness)
-			assert.Equal(t, tt.want, result)
-		})
-	}
-}
-
 // TestOpenFractalHeap tests opening a fractal heap.
 func TestOpenFractalHeap(t *testing.T) {
 	t.Run("invalid address", func(t *testing.T) {

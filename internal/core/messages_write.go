@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // EncodeLayoutMessage encodes a Data Layout message.
@@ -78,11 +79,11 @@ func encodeContiguousLayout(dataSize, dataAddress uint64, sb *Superblock) ([]byt
 	offset++
 
 	// Data address (variable size based on superblock)
-	writeUint64(buf[offset:], dataAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], dataAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Data size (variable size based on superblock)
-	writeUint64(buf[offset:], dataSize, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], dataSize, int(sb.LengthSize), sb.Endianness)
 
 	return buf, nil
 }
@@ -147,7 +148,7 @@ func encodeChunkedLayout(chunkDims []uint64, btreeAddress uint64, sb *Superblock
 	offset++
 
 	// B-tree root address (where chunk index is stored)
-	writeUint64(buf[offset:], btreeAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], btreeAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Chunk dimensions (each 4 bytes, uint32)
@@ -508,10 +509,10 @@ func EncodeSymbolTableMessage(btreeAddr, heapAddr uint64, offsetSize, _ int) []b
 	buf := make([]byte, messageSize)
 
 	// B-tree address (variable size based on superblock)
-	writeUint64(buf[0:], btreeAddr, offsetSize, binary.LittleEndian)
+	utils.PutUint(buf[0:], btreeAddr, offsetSize, binary.LittleEndian)
 
 	// Local heap address (variable size based on superblock)
-	writeUint64(buf[offsetSize:], heapAddr, offsetSize, binary.LittleEndian)
+	utils.PutUint(buf[offsetSize:], heapAddr, offsetSize, binary.LittleEndian)
 
 	return buf
 }
@@ -624,26 +625,6 @@ func EncodeAttributeMessage(name string, datatype *DatatypeMessage, dataspace *D
 	}
 
 	return buf, nil
-}
-
-// writeUint64 writes a uint64 value to buffer using variable-sized encoding.
-// This is a helper for encoding addresses and sizes with different byte widths.
-func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
-	switch size {
-	case 1:
-		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
-	case 2:
-		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
-	case 4:
-		endianness.PutUint32(buf, uint32(value)) //nolint:gosec // Safe: size limited to 4 bytes
-	case 8:
-		endianness.PutUint64(buf, value)
-	default:
-		// For other sizes, write what fits
-		for i := 0; i < size && i < 8; i++ {
-			buf[i] = byte(value >> (i * 8)) //nolint:gosec // G115: variable-size encoding
-		}
-	}
 }
 
 // encodeDatatypeReference encodes reference datatypes (object/region references).

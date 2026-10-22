@@ -43,28 +43,12 @@ func (m *mockWriterAt) Bytes() []byte {
 	return m.buf.Bytes()
 }
 
-func TestNewMinimalRootGroupHeader(t *testing.T) {
-	header := NewMinimalRootGroupHeader()
-
-	assert.Equal(t, uint8(2), header.Version, "Should be version 2")
-	assert.Equal(t, uint8(0), header.Flags, "Should have minimal flags")
-	assert.Len(t, header.Messages, 1, "Should have 1 message (Link Info)")
-
-	// Verify Link Info message
-	msg := header.Messages[0]
-	assert.Equal(t, MsgLinkInfo, msg.Type)
-	assert.Equal(t, 18, len(msg.Data), "Link Info should be 18 bytes")
-
-	// Verify Link Info content
-	assert.Equal(t, uint8(0), msg.Data[0], "Version should be 0")
-	assert.Equal(t, uint8(0), msg.Data[1], "Flags should be 0 (compact)")
-
-	// Verify UNDEF addresses
-	heapAddr := binary.LittleEndian.Uint64(msg.Data[2:10])
-	assert.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), heapAddr, "Heap address should be UNDEF")
-
-	btreeAddr := binary.LittleEndian.Uint64(msg.Data[10:18])
-	assert.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), btreeAddr, "B-tree address should be UNDEF")
+// newMinimalRootGroupHeader is a test fixture: v2 header with an empty compact Link Info message.
+func newMinimalRootGroupHeader() *ObjectHeaderWriter {
+	data := make([]byte, 18) // version 0, flags 0, two UNDEF addresses
+	binary.LittleEndian.PutUint64(data[2:10], 0xFFFFFFFFFFFFFFFF)
+	binary.LittleEndian.PutUint64(data[10:18], 0xFFFFFFFFFFFFFFFF)
+	return &ObjectHeaderWriter{Version: 2, Messages: []MessageWriter{{Type: MsgLinkInfo, Data: data}}}
 }
 
 func TestObjectHeaderWriter_WriteTo(t *testing.T) {
@@ -78,7 +62,7 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 	}{
 		{
 			name:    "minimal root group",
-			header:  NewMinimalRootGroupHeader(),
+			header:  newMinimalRootGroupHeader(),
 			address: 48, // After superblock v2
 			// Header prefix: 4 (sig) + 1 (ver) + 1 (flags) + 1 (chunk size) = 7
 			// Message: 1 (type) + 2 (size) + 1 (flags) + 18 (data) = 22
@@ -193,7 +177,7 @@ func TestObjectHeaderWriter_WriteTo(t *testing.T) {
 
 func TestObjectHeaderWriter_RoundTrip(t *testing.T) {
 	// Create minimal root group header
-	header := NewMinimalRootGroupHeader()
+	header := newMinimalRootGroupHeader()
 
 	// Write it
 	writer := newMockWriterAt()

@@ -157,7 +157,7 @@ func szipPackSamples(samples []uint32, pixelSize int, msb bool) []byte {
 	}
 	buf := make([]byte, len(samples)*pixelSize)
 	for i, s := range samples {
-		writeUint64(buf[i*pixelSize:], uint64(s), pixelSize, order)
+		utils.PutUint(buf[i*pixelSize:], uint64(s), pixelSize, order)
 	}
 	return buf
 }

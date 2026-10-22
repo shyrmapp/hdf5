@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,4 +66,21 @@ func TestHDF5v2Latest_FullRead(t *testing.T) {
 	require.Equal(t, 5, read["/cplx"], "complex128")
 	require.Equal(t, 5, read["/f64"])
 	require.Len(t, read, 16, "12 dense-link datasets + f64 + f16 + cplx + zint")
+}
+
+// TestFloat16Read reads a C-library-written H5T_IEEE_F16LE dataset covering
+// zero, normals, the float16 maximum, and a subnormal.
+func TestFloat16Read(t *testing.T) {
+	f, err := Open("testdata/float16_default.h5")
+	require.NoError(t, err)
+	defer f.Close()
+
+	var got []float64
+	f.Walk(func(path string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok && path == "/f16" {
+			got, err = ds.Read()
+			require.NoError(t, err)
+		}
+	})
+	require.Equal(t, []float64{0, 1, -2.5, 0.15625, 65504, math.Ldexp(1, -24)}, got)
 }

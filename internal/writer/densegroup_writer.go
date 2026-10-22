@@ -7,9 +7,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/shyrmapp/hdf5/internal/core"
 	"github.com/shyrmapp/hdf5/internal/structures"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // DenseGroupWriter manages dense group creation.
@@ -133,7 +135,10 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 	// Step 1: Process all links
 	for _, link := range dgw.links {
 		// 1a. Create link message (hard link format)
-		linkMsg := dgw.createLinkMessage(link, sb)
+		linkMsg, err := dgw.createLinkMessage(link, sb)
+		if err != nil {
+			return 0, fmt.Errorf("failed to encode link %s: %w", link.name, err)
+		}
 
 		// 1b. Insert into fractal heap
 		heapID, err := dgw.fractalHeap.InsertObject(linkMsg)
@@ -183,65 +188,32 @@ func (dgw *DenseGroupWriter) WriteToFile(fw *FileWriter, allocator *Allocator, s
 	return ohAddr, nil
 }
 
-// createLinkMessage creates link message for fractal heap storage.
+// createLinkMessage encodes a hard link message for fractal heap storage.
 //
-// Format (from H5Olinfo.c - link message):
-//   - Version: 1 (1 byte)
-//   - Type: 0 = Hard Link (1 byte)
-//   - Creation Order Present: 0 (1 byte, bit flags) - no creation order
-//   - Link Name Encoding: 0 = ASCII/UTF-8 (1 byte)
-//   - Link Name Length: variable (compact uint64 encoding)
-//   - Link Name: UTF-8 bytes
-//   - Link Info:
-//   - For hard link: target object header address (offsetSize bytes)
-//
-// Reference: H5Ollink.c - H5O__link_encode().
-func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblock) []byte {
-	nameBytes := []byte(link.name)
-	nameLen := uint64(len(nameBytes))
+// Reference: H5Olink.c - H5O__link_encode().
+func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblock) ([]byte, error) {
+	addr := make([]byte, sb.OffsetSize)
+	utils.PutUint(addr, link.targetAddr, int(sb.OffsetSize), sb.Endianness)
 
-	// Calculate message size
-	// Version (1) + Type (1) + Flags (1) + Encoding (1) + Name Length (variable) + Name + Address
-	// Name length encoded as compact uint64 (1-8 bytes based on value)
-	nameLenSize := compactUint64Size(nameLen)
-	messageSize := 4 + nameLenSize + len(nameBytes) + int(sb.OffsetSize)
+	// Bits 0-1 pick the width of the name length field.
+	var lenCode uint8
+	switch n := len(link.name); {
+	case n > math.MaxUint32:
+		lenCode = 3
+	case n > math.MaxUint16:
+		lenCode = 2
+	case n > math.MaxUint8:
+		lenCode = 1
+	}
 
-	buf := make([]byte, messageSize)
-	offset := 0
-
-	// Version (1 byte)
-	buf[offset] = 1 // Link message version 1
-	offset++
-
-	// Type (1 byte): 0 = Hard Link
-	buf[offset] = 0
-	offset++
-
-	// Flags (1 byte)
-	// Bit 0: creation order present (0 = no)
-	// Bit 1: link type field present (0 = no, type is in separate field)
-	// Bit 2: link name character set field present (1 = yes)
-	// Bit 3: link name is stored as a creation order (0 = no)
-	// Only bit 2 set (character set field present)
-	buf[offset] = 0x04 // Character set field present
-	offset++
-
-	// Link Name Character Set Encoding (1 byte)
-	buf[offset] = 0 // ASCII/UTF-8
-	offset++
-
-	// Link Name Length (compact uint64)
-	encodeCompactUint64(buf[offset:], nameLen)
-	offset += nameLenSize
-
-	// Link Name (UTF-8 bytes)
-	copy(buf[offset:], nameBytes)
-	offset += len(nameBytes)
-
-	// Link Info: For hard link, this is the target object header address
-	writeUint64(buf[offset:], link.targetAddr, int(sb.OffsetSize), sb.Endianness)
-
-	return buf
+	return core.EncodeLinkMessage(&core.LinkMessage{
+		Version:   1,
+		Flags:     lenCode | core.LinkFlagCharSetBit,
+		Type:      core.LinkTypeHard,
+		CharSet:   1, // UTF-8
+		Name:      link.name,
+		LinkValue: addr,
+	}, sb)
 }
 
 // createObjectHeader creates object header with Link Info Message.
@@ -316,49 +288,4 @@ func createScalarDataspaceMessage() []byte {
 	// Bytes 3-7: reserved (zeros)
 
 	return buf
-}
-
-// compactUint64Size returns the number of bytes needed to encode a uint64 in compact form.
-//
-// Compact encoding uses 1-8 bytes based on the value:
-//   - Values 0-255: 1 byte
-//   - Values 256-65535: 2 bytes
-//   - etc.
-func compactUint64Size(value uint64) int {
-	if value == 0 {
-		return 1
-	}
-
-	size := 0
-	for value > 0 {
-		size++
-		value >>= 8
-	}
-
-	return size
-}
-
-// encodeCompactUint64 encodes a uint64 value in compact form (little-endian).
-//
-// The size is determined by compactUint64Size().
-func encodeCompactUint64(buf []byte, value uint64) {
-	size := compactUint64Size(value)
-	for i := 0; i < size; i++ {
-		buf[i] = byte(value >> (8 * i)) //nolint:gosec // G115: variable-size encoding
-	}
-}
-
-// writeUint64 writes a uint64 value to buffer with specified size and endianness.
-// This is a helper function for encoding fields with variable sizes.
-func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
-	switch size {
-	case 1:
-		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
-	case 2:
-		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
-	case 4:
-		endianness.PutUint32(buf, uint32(value)) //nolint:gosec // Safe: size limited to 4 bytes
-	case 8:
-		endianness.PutUint64(buf, value)
-	}
 }

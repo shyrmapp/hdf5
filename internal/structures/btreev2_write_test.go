@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,9 +106,6 @@ func TestBTreeV2_DeleteRecord(t *testing.T) {
 	require.Equal(t, 2, len(bt.records))
 	require.Equal(t, uint64(2), bt.header.TotalRecords)
 	require.Equal(t, uint16(2), bt.header.NumRecordsRoot)
-	require.False(t, bt.HasKey("beta"))
-	require.True(t, bt.HasKey("alpha"))
-	require.True(t, bt.HasKey("gamma"))
 
 	// Leaf records must stay in sync with the in-memory slice
 	require.Equal(t, bt.records, bt.leaf.Records)
@@ -595,7 +593,7 @@ func TestWriteUint64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := make([]byte, tt.size)
-			writeUint64(buf, tt.value, tt.size, tt.endianness)
+			utils.PutUint(buf, tt.value, tt.size, tt.endianness)
 			require.Equal(t, tt.expected, buf)
 		})
 	}

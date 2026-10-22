@@ -301,3 +301,27 @@ func TestCInterop_RepackRoundTrip(t *testing.T) {
 		require.NoError(t, f.Close())
 	}
 }
+
+// TestCInterop_LZFFilterHeader verifies the official h5dump identifies the
+// LZF filter in a Go-written file (data needs the LZF plugin, so only the
+// header is checked).
+func TestCInterop_LZFFilterHeader(t *testing.T) {
+	h5dump := h5tool(t, "h5dump")
+	file := filepath.Join(t.TempDir(), "lzf_interop.h5")
+
+	fw, err := CreateForWrite(file, CreateTruncate)
+	require.NoError(t, err)
+	ds, err := fw.CreateDataset("/z", Int32, []uint64{100},
+		WithChunkDims([]uint64{25}), WithLZFCompression())
+	require.NoError(t, err)
+	vals := make([]int32, 100)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	require.NoError(t, ds.Write(vals))
+	require.NoError(t, fw.Close())
+
+	out := runH5(t, h5dump, "-H", "-p", file)
+	require.Contains(t, out, "FILTER_ID 32000")
+	require.Contains(t, out, "lzf")
+}

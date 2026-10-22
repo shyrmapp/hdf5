@@ -10,22 +10,8 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
-
-// writeUint64 writes a uint64 value to buffer with specified size and endianness.
-// This is a helper function for encoding fields with variable sizes.
-func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
-	switch size {
-	case 1:
-		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
-	case 2:
-		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
-	case 4:
-		endianness.PutUint32(buf, uint32(value)) //nolint:gosec // Safe: size limited to 4 bytes
-	case 8:
-		endianness.PutUint64(buf, value)
-	}
-}
 
 // B-tree v2 constants.
 const (
@@ -49,7 +35,6 @@ const (
 var (
 	ErrBTreeNodeFull    = errors.New("b-tree node is full")
 	ErrInvalidBTreeType = errors.New("invalid b-tree type")
-	ErrInvalidNodeSize  = errors.New("invalid node size")
 )
 
 // BTreeV2Header represents B-tree v2 header structure.
@@ -227,28 +212,6 @@ func (bt *WritableBTreeV2) InsertRecord(linkName string, heapID uint64) error {
 	bt.leaf.Records = bt.records
 
 	return nil
-}
-
-// HasKey checks if a key (link/attribute name) exists in the B-tree.
-//
-// Parameters:
-//   - name: name to check
-//
-// Returns:
-//   - bool: true if name exists (hash found), false otherwise
-//
-// Searches the single leaf node by name hash.
-func (bt *WritableBTreeV2) HasKey(name string) bool {
-	hash := jenkinsHash(name)
-
-	// Search in records
-	for _, record := range bt.records {
-		if record.NameHash == hash {
-			return true
-		}
-	}
-
-	return false
 }
 
 // SearchRecord searches for a record by name and returns the heap ID.
@@ -524,7 +487,7 @@ func (bt *WritableBTreeV2) encodeHeader(sb *core.Superblock) ([]byte, error) {
 	offset++
 
 	// Root Node Address (offsetSize bytes)
-	writeUint64(buf[offset:], bt.header.RootNodeAddr, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], bt.header.RootNodeAddr, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Number of Records in Root (2 bytes)
@@ -781,7 +744,7 @@ func readBTreeV2Header(r io.ReaderAt, address uint64, sb *core.Superblock) (*BTr
 	offset++
 
 	// Root Node Address (offsetSize bytes)
-	rootNodeAddr := readUint64(buf[offset:offset+int(sb.OffsetSize)], int(sb.OffsetSize), sb.Endianness)
+	rootNodeAddr := utils.ReadUint(buf[offset:offset+int(sb.OffsetSize)], int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Number of Records in Root (2 bytes)
@@ -898,32 +861,6 @@ func readBTreeV2LeafNode(r io.ReaderAt, address uint64, numRecords int, recType 
 	}
 
 	return leaf, records, nil
-}
-
-// readUint64 reads a uint64 value from buffer with specified size and endianness.
-// This is the counterpart to writeUint64 for decoding.
-func readUint64(buf []byte, size int, endianness binary.ByteOrder) uint64 {
-	switch size {
-	case 1:
-		return uint64(buf[0])
-	case 2:
-		return uint64(endianness.Uint16(buf[:2]))
-	case 4:
-		return uint64(endianness.Uint32(buf[:4]))
-	case 8:
-		return endianness.Uint64(buf[:8])
-	default:
-		return 0
-	}
-}
-
-// GetRecords returns the current list of records in the B-tree.
-// This is a read-only accessor for the records slice.
-//
-// Returns:
-//   - []LinkNameRecord: slice of all link name records in the B-tree
-func (bt *WritableBTreeV2) GetRecords() []LinkNameRecord {
-	return bt.records
 }
 
 // jenkinsHash computes Jenkins hash (lookup3) for a string.

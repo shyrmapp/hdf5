@@ -7,14 +7,14 @@ import (
 	"github.com/shyrmapp/hdf5/internal/core"
 )
 
-// LinkType represents the type of link.
-type LinkType uint8
+// LinkType and its constants are shared with the encoder in internal/core.
+type LinkType = core.LinkType
 
-// Link type constants define different kinds of links between HDF5 objects.
+// Link type constants.
 const (
-	LinkTypeHard     LinkType = 0  // Hard link (object address).
-	LinkTypeSoft     LinkType = 1  // Soft link (path string).
-	LinkTypeExternal LinkType = 64 // External link (user-defined >= 64).
+	LinkTypeHard     = core.LinkTypeHard
+	LinkTypeSoft     = core.LinkTypeSoft
+	LinkTypeExternal = core.LinkTypeExternal
 )
 
 // LinkMessage represents an HDF5 Link message (type 6).

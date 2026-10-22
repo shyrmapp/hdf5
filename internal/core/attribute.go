@@ -477,7 +477,7 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 //   - error: Non-nil if encoding fails
 //
 // Reference: H5Oattr.c - H5O__attr_encode().
-func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) {
+func EncodeAttributeFromStruct(attr *Attribute, _ *Superblock) ([]byte, error) {
 	if attr == nil {
 		return nil, fmt.Errorf("attribute is nil")
 	}
@@ -496,7 +496,6 @@ func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) 
 
 	// Use the existing EncodeAttributeMessage from messages_write.go
 	// It handles all the encoding logic according to HDF5 spec
-	_ = sb // Currently unused, encoding is always little-endian
 
 	return EncodeAttributeMessage(attr.Name, attr.Datatype, attr.Dataspace, attr.Data)
 }
@@ -546,7 +545,7 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	if offset+offsetSize > len(data) {
 		return nil, fmt.Errorf("attribute info message too short for fractal heap address")
 	}
-	msg.FractalHeapAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
+	msg.FractalHeapAddr = utils.ReadUint(data[offset:offset+offsetSize], offsetSize, binary.LittleEndian)
 	offset += offsetSize
 	// Objects that track creation order but still store their attributes in
 	// the header carry undefined addresses; report those as "no dense storage" (0).
@@ -559,7 +558,7 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	if offset+offsetSize > len(data) {
 		return nil, fmt.Errorf("attribute info message too short for btree name index address")
 	}
-	msg.BTreeNameIndexAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
+	msg.BTreeNameIndexAddr = utils.ReadUint(data[offset:offset+offsetSize], offsetSize, binary.LittleEndian)
 	offset += offsetSize
 	if undefined {
 		msg.BTreeNameIndexAddr = 0
@@ -570,7 +569,7 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 		if offset+offsetSize > len(data) {
 			return nil, fmt.Errorf("attribute info message too short for btree order index address")
 		}
-		msg.BTreeOrderIndexAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
+		msg.BTreeOrderIndexAddr = utils.ReadUint(data[offset:offset+offsetSize], offsetSize, binary.LittleEndian)
 		if isUndefinedAddress(msg.BTreeOrderIndexAddr, sb.OffsetSize) {
 			msg.BTreeOrderIndexAddr = 0
 		}

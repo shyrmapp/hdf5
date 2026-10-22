@@ -23,47 +23,6 @@ type MessageWriter struct {
 	Data []byte
 }
 
-// NewMinimalRootGroupHeader creates a minimal object header v2 for an empty root group.
-// Just enough to make a valid HDF5 file.
-//
-// The root group header contains:
-//   - Object Header v2 with minimal flags (no times, no attribute phase change)
-//   - Link Info message (empty, compact storage)
-//
-// Returns an ObjectHeaderWriter ready to be written to file.
-func NewMinimalRootGroupHeader() *ObjectHeaderWriter {
-	// Create minimal Link Info message for an empty group
-	// Link Info message format (compact storage, no dense links):
-	//   Version: 0 (1 byte)
-	//   Flags: 0x00 (1 byte) - compact storage, no index
-	//   Max Compact (optional): 2 bytes if flags & 0x01
-	//   Min Dense (optional): 2 bytes if flags & 0x01
-	//   Heap Address (8 bytes): 0xFFFFFFFFFFFFFFFF (UNDEF for compact)
-	//   B-tree Address (8 bytes): 0xFFFFFFFFFFFFFFFF (UNDEF for compact)
-	//
-	// Empty group: Version=0, Flags=0, no optional fields, two UNDEF addresses
-	linkInfoData := make([]byte, 18) // 1+1+8+8 = 18 bytes
-	linkInfoData[0] = 0              // Version 0
-	linkInfoData[1] = 0              // Flags: compact storage, no tracking
-
-	// Heap address (UNDEF for compact storage)
-	binary.LittleEndian.PutUint64(linkInfoData[2:10], 0xFFFFFFFFFFFFFFFF)
-
-	// B-tree name index address (UNDEF for compact storage)
-	binary.LittleEndian.PutUint64(linkInfoData[10:18], 0xFFFFFFFFFFFFFFFF)
-
-	return &ObjectHeaderWriter{
-		Version: 2,
-		Flags:   0, // Minimal flags: no times, no attribute phase change
-		Messages: []MessageWriter{
-			{
-				Type: MsgLinkInfo,
-				Data: linkInfoData,
-			},
-		},
-	}
-}
-
 // MinOHDRAllocSize is the minimum allocation size for object headers.
 // This provides padding for future attribute additions without needing
 // continuation chunks. 256 bytes accommodates ~7 compact attributes.
@@ -492,9 +451,7 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 //   - error: Non-nil if write fails
 //
 // Reference: H5O.c - H5O_flush().
-func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superblock) error {
-	_ = sb // Reserved for future use (v1 headers or encoding parameters)
-
+func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, _ *Superblock) error {
 	if oh == nil {
 		return fmt.Errorf("object header is nil")
 	}

@@ -3,6 +3,7 @@ package structures
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"io"
 )
 
@@ -96,10 +97,6 @@ type HeapIDType uint8
 const (
 	// HeapIDTypeManaged - Managed object stored in fractal heap blocks.
 	HeapIDTypeManaged HeapIDType = 0x00
-	// HeapIDTypeHuge - Huge object stored in file directly.
-	HeapIDTypeHuge HeapIDType = 0x10
-	// HeapIDTypeTiny - Tiny object stored in heap ID directly.
-	HeapIDTypeTiny HeapIDType = 0x20
 )
 
 // DirectBlock represents a fractal heap direct block.
@@ -209,46 +206,46 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 	offset += 4
 
 	// Next Huge Object ID (sizeof_size bytes)
-	header.NextHugeObjID = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.NextHugeObjID = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// v2 B-tree Address of Huge Objects (sizeof_addr bytes)
-	header.HugeObjBTreeAddr = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
+	header.HugeObjBTreeAddr = utils.ReadUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
 	offset += int(sizeofAddr)
 
 	// Amount of Managed Free Space (sizeof_size bytes)
-	header.FreeSpaceAmount = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.FreeSpaceAmount = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Address of Managed Free Space (sizeof_addr bytes)
-	header.FreeSpaceSectionAddr = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
+	header.FreeSpaceSectionAddr = utils.ReadUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
 	offset += int(sizeofAddr)
 
 	// Managed Objects heap statistics (4 * sizeof_size bytes)
-	header.ManagedObjSpaceSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.ManagedObjSpaceSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
-	header.ManagedObjAllocSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.ManagedObjAllocSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
-	header.ManagedObjIterOffset = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.ManagedObjIterOffset = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
-	header.ManagedObjCount = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.ManagedObjCount = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Huge Objects heap statistics (2 * sizeof_size bytes)
-	header.HugeObjSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.HugeObjSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
-	header.HugeObjCount = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.HugeObjCount = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Tiny Objects heap statistics (2 * sizeof_size bytes)
-	header.TinyObjSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.TinyObjSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
-	header.TinyObjCount = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.TinyObjCount = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Managed Objects Doubling-Table (variable size)
@@ -257,11 +254,11 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 	offset += 2
 
 	// Starting Block Size (sizeof_size bytes)
-	header.StartingBlockSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.StartingBlockSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Maximum Direct Block Size (sizeof_size bytes)
-	header.MaxDirectBlockSize = readUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
+	header.MaxDirectBlockSize = utils.ReadUint(buf[offset:offset+int(sizeofSize)], int(sizeofSize), endianness)
 	offset += int(sizeofSize)
 
 	// Maximum Heap Size (2 bytes) - stored as log2
@@ -273,7 +270,7 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 	offset += 2
 
 	// Address of Root Block (sizeof_addr bytes)
-	header.RootBlockAddr = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
+	header.RootBlockAddr = utils.ReadUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
 	offset += int(sizeofAddr)
 
 	// Current # of Rows in Root Indirect Block (2 bytes)
@@ -302,36 +299,6 @@ func parseFractalHeapHeader(r io.ReaderAt, address uint64, sizeofSize, sizeofAdd
 	// Skip for now
 
 	return header, nil
-}
-
-// readUint reads a variable-length unsigned integer.
-// Used for reading size and address fields with variable byte widths.
-func readUint(data []byte, size int, endianness binary.ByteOrder) uint64 {
-	if len(data) < size {
-		return 0
-	}
-
-	switch size {
-	case 1:
-		return uint64(data[0])
-	case 2:
-		return uint64(endianness.Uint16(data[:2]))
-	case 4:
-		return uint64(endianness.Uint32(data[:4]))
-	case 8:
-		return endianness.Uint64(data[:8])
-	default:
-		// Variable size - read as little-endian bytes
-		var val uint64
-		for i := 0; i < size && i < 8; i++ {
-			if endianness == binary.LittleEndian {
-				val |= uint64(data[i]) << (8 * i) //nolint:gosec // G602: loop bounded by size parameter
-			} else {
-				val = (val << 8) | uint64(data[i]) //nolint:gosec // G602: loop bounded by size parameter
-			}
-		}
-		return val
-	}
 }
 
 // computeOffsetSize computes the number of bytes needed to store a value.

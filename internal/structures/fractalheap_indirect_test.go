@@ -5,10 +5,7 @@ package structures
 
 import (
 	"bytes"
-	"encoding/binary"
 	"testing"
-
-	"github.com/shyrmapp/hdf5/internal/core"
 )
 
 // TestIndirectBlockCreation tests NewWritableIndirectBlock initialization.
@@ -223,84 +220,6 @@ func TestManyAttributes(t *testing.T) {
 	// Verify object count
 	if heap.Header.NumManagedObjects != uint64(numAttributes) {
 		t.Errorf("Expected %d objects, got %d", numAttributes, heap.Header.NumManagedObjects)
-	}
-}
-
-// TestIndirectBlockSerialization tests WriteToFile/LoadFromFile round-trip.
-func TestIndirectBlockSerialization(t *testing.T) {
-	// Create indirect block
-	heapHeaderAddr := uint64(0x1000)
-	blockOffset := uint64(0)
-	numRows := uint16(2)
-	tableWidth := uint16(2)
-	maxDirectRows := uint16(2)
-
-	iblock := NewWritableIndirectBlock(heapHeaderAddr, blockOffset, numRows, tableWidth, maxDirectRows)
-
-	// Set some child addresses
-	if err := iblock.SetChildAddress(0, 0x2000); err != nil {
-		t.Fatalf("Failed to set child 0: %v", err)
-	}
-	if err := iblock.SetChildAddress(1, 0x3000); err != nil {
-		t.Fatalf("Failed to set child 1: %v", err)
-	}
-	if err := iblock.SetChildAddress(2, 0x4000); err != nil {
-		t.Fatalf("Failed to set child 2: %v", err)
-	}
-
-	// Create mock writer and allocator
-	writer := NewMockWriter()
-	allocator := NewMockAllocator(0x5000)
-
-	// Create mock superblock
-	sb := &core.Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	heapOffsetSize := uint8(2) // 2-byte heap offsets
-
-	// Write to file
-	address, err := iblock.WriteToFile(writer, allocator, sb, heapOffsetSize)
-	if err != nil {
-		t.Fatalf("Failed to write indirect block: %v", err)
-	}
-
-	t.Logf("Indirect block written at address 0x%X", address)
-
-	// Read back using ParseIndirectBlock
-	readBlock, err := ParseIndirectBlock(writer, address, numRows, tableWidth,
-		sb.OffsetSize, heapOffsetSize, sb.Endianness, heapHeaderAddr)
-	if err != nil {
-		t.Fatalf("Failed to parse indirect block: %v", err)
-	}
-
-	// Verify header fields
-	if readBlock.Header.Version != iblock.Header.Version {
-		t.Errorf("Version mismatch: expected %d, got %d", iblock.Header.Version, readBlock.Header.Version)
-	}
-
-	if readBlock.Header.HeapHeaderAddr != heapHeaderAddr {
-		t.Errorf("Heap header addr mismatch: expected 0x%X, got 0x%X",
-			heapHeaderAddr, readBlock.Header.HeapHeaderAddr)
-	}
-
-	if readBlock.Header.BlockOffset != blockOffset {
-		t.Errorf("Block offset mismatch: expected %d, got %d", blockOffset, readBlock.Header.BlockOffset)
-	}
-
-	// Verify child addresses
-	if len(readBlock.Entries) != len(iblock.ChildAddresses) {
-		t.Fatalf("Entry count mismatch: expected %d, got %d",
-			len(iblock.ChildAddresses), len(readBlock.Entries))
-	}
-
-	for i := range iblock.ChildAddresses {
-		if readBlock.Entries[i] != iblock.ChildAddresses[i] {
-			t.Errorf("Entry %d mismatch: expected 0x%X, got 0x%X",
-				i, iblock.ChildAddresses[i], readBlock.Entries[i])
-		}
 	}
 }
 

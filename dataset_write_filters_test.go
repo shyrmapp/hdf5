@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -640,4 +641,36 @@ func TestChunkedDatasetMixedValues(t *testing.T) {
 	compressionRatio := float64(uncompressedSize) / float64(info.Size())
 
 	t.Logf("Mixed values compression: %.2f:1", compressionRatio)
+}
+
+// TestLZFWrite_RoundTrip writes an LZF-compressed chunked dataset and reads
+// it back; the stored file must carry filter ID 32000 (h5py-compatible).
+func TestLZFWrite_RoundTrip(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "lzf.h5")
+
+	data := make([]float64, 1000)
+	for i := range data {
+		data[i] = float64(i % 50)
+	}
+
+	fw, err := CreateForWrite(file, CreateTruncate)
+	require.NoError(t, err)
+	ds, err := fw.CreateDataset("/z", Float64, []uint64{1000},
+		WithChunkDims([]uint64{250}), WithLZFCompression())
+	require.NoError(t, err)
+	require.NoError(t, ds.Write(data))
+	require.NoError(t, fw.Close())
+
+	f, err := Open(file)
+	require.NoError(t, err)
+	defer f.Close()
+
+	var got []float64
+	f.Walk(func(_ string, obj Object) {
+		if d, ok := obj.(*Dataset); ok {
+			got, err = d.Read()
+			require.NoError(t, err)
+		}
+	})
+	require.Equal(t, data, got)
 }

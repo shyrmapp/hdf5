@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"io"
 )
 
@@ -70,11 +71,11 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 	offset += 2
 
 	// Left sibling address.
-	node.LeftSibling = readAddress(header[offset:], int(offsetSize))
+	node.LeftSibling = utils.ReadUint(header[offset:], int(offsetSize), binary.LittleEndian)
 	offset += int(offsetSize)
 
 	// Right sibling address.
-	node.RightSibling = readAddress(header[offset:], int(offsetSize))
+	node.RightSibling = utils.ReadUint(header[offset:], int(offsetSize), binary.LittleEndian)
 	// offset is not used after this point.
 
 	// Now read keys and child pointers.
@@ -149,38 +150,12 @@ func ParseBTreeV1Node(r io.ReaderAt, address uint64, offsetSize uint8, ndims int
 			if dataOffset+childSize > len(data) {
 				return nil, errors.New("b-tree data truncated reading child")
 			}
-			node.Children[i] = readAddress(data[dataOffset:], childSize)
+			node.Children[i] = utils.ReadUint(data[dataOffset:], childSize, binary.LittleEndian)
 			dataOffset += childSize
 		}
 	}
 
 	return node, nil
-}
-
-// readAddress reads a variable-sized address from byte slice.
-func readAddress(data []byte, size int) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	// Use data[:size] for all slicing so gosec can verify bounds statically.
-	d := data[:size]
-
-	switch size {
-	case 1:
-		return uint64(d[0])
-	case 2:
-		return uint64(binary.LittleEndian.Uint16(d))
-	case 4:
-		return uint64(binary.LittleEndian.Uint32(d))
-	case 8:
-		return binary.LittleEndian.Uint64(d)
-	default:
-		// Pad to 8 bytes.
-		var buf [8]byte
-		copy(buf[:], d)
-		return binary.LittleEndian.Uint64(buf[:])
-	}
 }
 
 // ChunkEntry represents a chunk location in the B-tree.

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // LinkInfoMessage represents the Link Info message (HDF5 message type 0x0002).
@@ -130,14 +131,14 @@ func ParseLinkInfoMessage(data []byte, sb *Superblock) (*LinkInfoMessage, error)
 	if len(data) < offset+int(sb.OffsetSize) {
 		return nil, errors.New("link info message truncated (missing fractal heap address)")
 	}
-	lim.FractalHeapAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	lim.FractalHeapAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Read name B-tree address (always present)
 	if len(data) < offset+int(sb.OffsetSize) {
 		return nil, errors.New("link info message truncated (missing name B-tree address)")
 	}
-	lim.NameBTreeAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	lim.NameBTreeAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Read creation order B-tree address (optional, only if indexed)
@@ -145,7 +146,7 @@ func ParseLinkInfoMessage(data []byte, sb *Superblock) (*LinkInfoMessage, error)
 		if len(data) < offset+int(sb.OffsetSize) {
 			return nil, errors.New("link info message truncated (missing creation order B-tree address)")
 		}
-		lim.CreationOrderBTreeAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		lim.CreationOrderBTreeAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 	} else {
 		lim.CreationOrderBTreeAddress = 0
 	}
@@ -220,16 +221,16 @@ func EncodeLinkInfoMessage(lim *LinkInfoMessage, sb *Superblock) ([]byte, error)
 	}
 
 	// Write fractal heap address (always present)
-	writeUint64(buf[offset:], lim.FractalHeapAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], lim.FractalHeapAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Write name B-tree address (always present)
-	writeUint64(buf[offset:], lim.NameBTreeAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], lim.NameBTreeAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Write creation order B-tree address if indexed
 	if lim.HasCreationOrderIndex() {
-		writeUint64(buf[offset:], lim.CreationOrderBTreeAddress, int(sb.OffsetSize), sb.Endianness)
+		utils.PutUint(buf[offset:], lim.CreationOrderBTreeAddress, int(sb.OffsetSize), sb.Endianness)
 	}
 
 	return buf, nil

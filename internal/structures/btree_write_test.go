@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -284,7 +285,7 @@ func TestWriteAddr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := make([]byte, tt.size)
-			writeAddr(buf, tt.addr, tt.size, binary.LittleEndian)
+			utils.PutUint(buf, tt.addr, tt.size, binary.LittleEndian)
 			assert.Equal(t, tt.expected, buf)
 		})
 	}

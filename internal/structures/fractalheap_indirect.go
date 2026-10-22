@@ -6,53 +6,10 @@ package structures
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
-
-// IndirectBlock represents a fractal heap indirect block (read-only).
-//
-// An indirect block is a node in the fractal heap's doubling table structure that
-// contains addresses of child blocks (either direct blocks or other indirect blocks).
-// This enables the heap to grow beyond a single direct block and support large objects.
-//
-// Reference: H5HFiblock.c, H5HFpkg.h (struct H5HF_indirect_t)
-// Format Spec: https://docs.hdfgroup.org/hdf5/latest/_f_m_t3.html#FractalHeap
-//
-// On-Disk Format:
-//   - Signature: "FHIB" (4 bytes)
-//   - Version: 0 (1 byte)
-//   - Heap Header Address (sizeof_addr bytes)
-//   - Block Offset (heap_off_size bytes) - offset within heap's address space
-//   - Child Block Addresses (K×M entries, sizeof_addr each)
-//   - K = number of rows (nrows)
-//   - M = table width (from heap header, typically 2)
-//   - First entries point to direct blocks, later to indirect blocks
-//   - Checksum (4 bytes, optional)
-//
-// Doubling Table Structure:
-//
-//	Each row contains blocks of size = starting_size × 2^row
-//	Rows 0..N-1: Direct blocks (size <= max_direct_block_size)
-//	Rows N..K-1: Indirect blocks (point to child indirect blocks)
-type IndirectBlock struct {
-	Header  IndirectBlockHeader
-	Entries []uint64 // Child block addresses (direct or indirect)
-}
-
-// IndirectBlockHeader represents the metadata portion of an indirect block.
-type IndirectBlockHeader struct {
-	Signature      [4]byte // "FHIB"
-	Version        uint8   // Currently 0
-	HeapHeaderAddr uint64  // Address of heap header
-	BlockOffset    uint64  // Offset within heap's address space
-	NumRows        uint16  // Number of rows in this block
-	// Computed/derived fields (not stored on disk)
-	MaxDirectRows   uint16 // Max rows of direct blocks (before indirect)
-	TableWidth      uint16 // Width of doubling table (from heap header)
-	ChecksumPresent bool   // Whether checksum is at end of block
-}
 
 // WritableIndirectBlock represents an indirect block for writing.
 //
@@ -141,22 +98,6 @@ func (wb *WritableIndirectBlock) SetChildAddress(entryIndex int, address uint64)
 
 	wb.ChildAddresses[entryIndex] = address
 	return nil
-}
-
-// GetChildAddress retrieves the address of a child block at the given entry index.
-//
-// Parameters:
-//   - entryIndex: Index in the child address table (0-based)
-//
-// Returns:
-//   - uint64: Address of the child block (0 = unallocated)
-//   - error: if entry index is out of bounds
-func (wb *WritableIndirectBlock) GetChildAddress(entryIndex int) (uint64, error) {
-	if entryIndex < 0 || entryIndex >= len(wb.ChildAddresses) {
-		return 0, fmt.Errorf("invalid entry index %d (valid range: 0-%d)", entryIndex, len(wb.ChildAddresses)-1)
-	}
-
-	return wb.ChildAddresses[entryIndex], nil
 }
 
 // CalculateEntryIndex calculates the entry index from row and column.
@@ -268,16 +209,16 @@ func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core
 	offset++
 
 	// Heap Header Address (sizeof_addr bytes)
-	writeUintVar(buf[offset:], wb.Header.HeapHeaderAddr, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], wb.Header.HeapHeaderAddr, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Block Offset (heap_off_size bytes)
-	writeUintVar(buf[offset:], wb.Header.BlockOffset, int(heapOffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], wb.Header.BlockOffset, int(heapOffsetSize), sb.Endianness)
 	offset += int(heapOffsetSize)
 
 	// Child Block Addresses (K×M entries, sizeof_addr each)
 	for _, addr := range wb.ChildAddresses {
-		writeUintVar(buf[offset:], addr, int(sb.OffsetSize), sb.Endianness)
+		utils.PutUint(buf[offset:], addr, int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 	}
 
@@ -289,138 +230,4 @@ func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core
 
 	// Write to file
 	return writer.WriteAtAddress(buf, address)
-}
-
-// ParseIndirectBlock reads and parses an indirect block from file.
-//
-// Parameters:
-//   - reader: File reader interface
-//   - address: Address of indirect block in file
-//   - numRows: Expected number of rows in block
-//   - tableWidth: Table width from heap header
-//   - sizeofAddr: Size of address fields (from superblock)
-//   - heapOffsetSize: Size of heap offset fields (from heap header)
-//   - endianness: Byte order (from superblock)
-//   - expectedHeapHeaderAddr: Expected heap header address (for validation)
-//
-// Returns:
-//   - *IndirectBlock: Parsed indirect block
-//   - error: if parsing fails or validation errors.
-//
-// Reference: H5HFcache.c - H5HF__cache_iblock_deserialize().
-func ParseIndirectBlock(reader io.ReaderAt, address uint64, numRows, tableWidth uint16,
-	sizeofAddr, heapOffsetSize uint8, endianness binary.ByteOrder, expectedHeapHeaderAddr uint64) (*IndirectBlock, error) {
-	if address == 0 || address == ^uint64(0) {
-		return nil, fmt.Errorf("invalid indirect block address: 0x%X", address)
-	}
-
-	// Calculate block size
-	numEntries := int(numRows) * int(tableWidth)
-	headerSize := 5 + int(sizeofAddr) + int(heapOffsetSize)
-	entriesSize := numEntries * int(sizeofAddr)
-	// Assume checksum present (common case)
-	totalSize := headerSize + entriesSize + 4
-
-	// Read block data
-	buf := make([]byte, totalSize)
-	//nolint:gosec // G115: uint64 to int64 conversion safe for file offsets
-	if _, err := reader.ReadAt(buf, int64(address)); err != nil {
-		return nil, fmt.Errorf("failed to read indirect block: %w", err)
-	}
-
-	offset := 0
-	iblock := &IndirectBlock{}
-
-	// Signature (4 bytes) - "FHIB"
-	copy(iblock.Header.Signature[:], buf[offset:offset+4])
-	if string(iblock.Header.Signature[:]) != IndirectBlockSignature {
-		return nil, fmt.Errorf("invalid indirect block signature: %q (expected %s)",
-			iblock.Header.Signature, IndirectBlockSignature)
-	}
-	offset += 4
-
-	// Version (1 byte)
-	iblock.Header.Version = buf[offset]
-	if iblock.Header.Version != IndirectBlockVersion {
-		return nil, fmt.Errorf("unsupported indirect block version: %d (only version %d supported)",
-			iblock.Header.Version, IndirectBlockVersion)
-	}
-	offset++
-
-	// Heap Header Address (sizeof_addr bytes)
-	iblock.Header.HeapHeaderAddr = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
-	offset += int(sizeofAddr)
-
-	// Validate heap header address
-	if iblock.Header.HeapHeaderAddr != expectedHeapHeaderAddr {
-		return nil, fmt.Errorf("indirect block heap header address mismatch: 0x%X (expected 0x%X)",
-			iblock.Header.HeapHeaderAddr, expectedHeapHeaderAddr)
-	}
-
-	// Block Offset (heap_off_size bytes)
-	iblock.Header.BlockOffset = readUint(buf[offset:offset+int(heapOffsetSize)], int(heapOffsetSize), endianness)
-	offset += int(heapOffsetSize)
-
-	// Store metadata
-	iblock.Header.NumRows = numRows
-	iblock.Header.TableWidth = tableWidth
-
-	// Child Block Addresses (K×M entries, sizeof_addr each)
-	iblock.Entries = make([]uint64, numEntries)
-	for i := 0; i < numEntries; i++ {
-		iblock.Entries[i] = readUint(buf[offset:offset+int(sizeofAddr)], int(sizeofAddr), endianness)
-		offset += int(sizeofAddr)
-	}
-
-	// Checksum (4 bytes) - validate if present
-	// Skip validation, just note presence
-	iblock.Header.ChecksumPresent = (totalSize == headerSize+entriesSize+4)
-
-	return iblock, nil
-}
-
-// LoadFromFile loads an existing indirect block for modification (RMW).
-//
-// Parameters:
-//   - reader: File reader interface
-//   - address: Address of indirect block in file
-//   - numRows: Expected number of rows
-//   - tableWidth: Table width from heap header
-//   - maxDirectRows: Max rows with direct blocks
-//   - sb: Superblock for field sizes
-//   - heapOffsetSize: Size of heap offset fields
-//   - expectedHeapHeaderAddr: Expected heap header address
-//
-// Returns:
-//   - error: if loading fails.
-//
-// Reference: H5HFiblock.c - H5HF__man_iblock_protect().
-func (wb *WritableIndirectBlock) LoadFromFile(reader io.ReaderAt, address uint64, numRows, tableWidth, maxDirectRows uint16,
-	sb *core.Superblock, heapOffsetSize uint8, expectedHeapHeaderAddr uint64) error {
-	// Parse the indirect block
-	iblock, err := ParseIndirectBlock(reader, address, numRows, tableWidth,
-		sb.OffsetSize, heapOffsetSize, sb.Endianness, expectedHeapHeaderAddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse indirect block: %w", err)
-	}
-
-	// Store loaded address for WriteAt() support
-	wb.loadedAddress = address
-
-	// Convert to writable format
-	wb.Header = WritableIndirectBlockHeader{
-		Version:         iblock.Header.Version,
-		HeapHeaderAddr:  iblock.Header.HeapHeaderAddr,
-		BlockOffset:     iblock.Header.BlockOffset,
-		NumRows:         numRows,
-		TableWidth:      tableWidth,
-		MaxDirectRows:   maxDirectRows,
-		ChecksumEnabled: iblock.Header.ChecksumPresent,
-	}
-
-	// Copy child addresses
-	wb.ChildAddresses = make([]uint64, len(iblock.Entries))
-	copy(wb.ChildAddresses, iblock.Entries)
-
-	return nil
 }
