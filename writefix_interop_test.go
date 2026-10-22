@@ -224,3 +224,40 @@ func TestCInterop_UnwrittenChunkedDataset(t *testing.T) {
 		}
 	})
 }
+
+// h5dump verifies Fletcher32 checksums on read, so a wrong algorithm shows up
+// as a read failure. Odd chunk lengths and pseudo-random data exercise the
+// tail-byte rule and the fold-vs-mod reduction.
+func TestCInterop_Fletcher32Checksums(t *testing.T) {
+	fw, file := newWriteFile(t)
+	odd := []uint8{1, 2, 3, 250, 251, 252, 253}
+	d1, err := fw.CreateDataset("/odd", Uint8, []uint64{7}, WithChunkDims([]uint64{7}), WithFletcher32())
+	require.NoError(t, err)
+	require.NoError(t, d1.Write(odd))
+
+	rnd := make([]uint32, 4096)
+	x := uint32(12345)
+	for i := range rnd {
+		x = x*1664525 + 1013904223
+		rnd[i] = x
+	}
+	d2, err := fw.CreateDataset("/rnd", Uint32, []uint64{4096}, WithChunkDims([]uint64{1024}), WithFletcher32())
+	require.NoError(t, err)
+	require.NoError(t, d2.Write(rnd))
+
+	// The C filter also accepts byte-swapped sums (files from HDF5 1.6.2), and mod
+	// 65535 commutes with byte swapping, so only chunks whose running sums hit
+	// 65535 tell the C algorithm from our old little-endian one: all-0xFF words.
+	ff := make([]uint8, 32)
+	for i := range ff {
+		ff[i] = 0xFF
+	}
+	d3, err := fw.CreateDataset("/ff", Uint8, []uint64{32}, WithChunkDims([]uint64{32}), WithFletcher32())
+	require.NoError(t, err)
+	require.NoError(t, d3.Write(ff))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, "(0): 1, 2, 3, 250, 251, 252, 253")
+	require.Contains(t, out, fmt.Sprintf("%d", rnd[4095]))
+}

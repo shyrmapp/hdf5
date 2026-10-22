@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/shyrmapp/hdf5/internal/core"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,8 +110,8 @@ func TestCalculateFletcher32_KnownValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checksum1 := calculateFletcher32(tt.data)
-			checksum2 := calculateFletcher32(tt.data)
+			checksum1 := core.Fletcher32(tt.data)
+			checksum2 := core.Fletcher32(tt.data)
 
 			// Same data should produce same checksum
 			require.Equal(t, checksum1, checksum2)
