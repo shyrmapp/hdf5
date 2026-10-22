@@ -20,7 +20,7 @@ type File struct {
 	osFile        *os.File
 	sb            *core.Superblock
 	root          *Group
-	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
+	loadingBTrees map[uint64]bool // B-trees on the current load path, to cut ancestor cycles
 	loadingGroups map[uint64]bool // Groups on the current load path (hard-link cycle guard)
 	maxReadBytes  uint64          // Ceiling for a single whole-dataset read; 0 = default
 }
@@ -90,7 +90,7 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	file := &File{
 		osFile:        f,
 		sb:            sb,
-		visitedBTrees: make(map[uint64]bool),
+		loadingBTrees: make(map[uint64]bool),
 		loadingGroups: make(map[uint64]bool),
 	}
 	for _, opt := range opts {
