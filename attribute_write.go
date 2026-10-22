@@ -1103,12 +1103,12 @@ func inferUnsignedInt(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMe
 
 // inferFloat infers datatype for floating point numbers.
 func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage, error) {
-	var size uint32
+	var size, bitField uint32
 	switch v.Kind() {
 	case reflect.Float32:
-		size = 4
+		size, bitField = 4, float32ClassBits
 	case reflect.Float64:
-		size = 8
+		size, bitField = 8, float64ClassBits
 	default:
 		return nil, nil, fmt.Errorf("not a float type")
 	}
@@ -1116,7 +1116,7 @@ func inferFloat(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	dt := &core.DatatypeMessage{
 		Class:         core.DatatypeFloat,
 		Size:          size,
-		ClassBitField: 0, // Little-endian
+		ClassBitField: bitField,
 	}
 
 	ds := &core.DataspaceMessage{
@@ -1178,9 +1178,9 @@ func inferSlice(v reflect.Value) (*core.DatatypeMessage, *core.DataspaceMessage,
 	case reflect.Uint64:
 		dt = &core.DatatypeMessage{Class: core.DatatypeFixed, Size: 8, ClassBitField: 0}
 	case reflect.Float32:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 4, ClassBitField: 0}
+		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 4, ClassBitField: float32ClassBits}
 	case reflect.Float64:
-		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 8, ClassBitField: 0}
+		dt = &core.DatatypeMessage{Class: core.DatatypeFloat, Size: 8, ClassBitField: float64ClassBits}
 	default:
 		return nil, nil, fmt.Errorf("unsupported slice element type: %s", elemKind)
 	}

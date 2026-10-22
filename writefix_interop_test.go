@@ -55,3 +55,21 @@ func TestCInterop_GroupChildLimit(t *testing.T) {
 	require.Contains(t, out, `DATASET "d000"`)
 	require.NotContains(t, out, "overflow")
 }
+
+func TestCInterop_FloatAttributes(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/ds", Int32, []uint64{1})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{1}))
+	require.NoError(t, ds.WriteAttribute("f32", float32(1.25)))
+	require.NoError(t, ds.WriteAttribute("f64s", []float64{1, 2, 3}))
+	g, err := fw.CreateGroup("/g")
+	require.NoError(t, err)
+	require.NoError(t, g.WriteAttribute("gf", float64(2.5)))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, "(0): 1.25")
+	require.Contains(t, out, "(0): 1, 2, 3")
+	require.Contains(t, out, "(0): 2.5")
+}

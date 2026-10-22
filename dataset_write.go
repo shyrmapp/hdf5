@@ -483,8 +483,8 @@ func init() {
 		// Floats
 		// Float ClassBitField: bits 0-7 = byte order + norm (0x20 = implied MSB),
 		// bits 8-15 = sign bit position (31 for float32, 63 for float64)
-		Float32: &basicTypeHandler{core.DatatypeFloat, 4, 0x1F20}, // sign=31, norm=implied
-		Float64: &basicTypeHandler{core.DatatypeFloat, 8, 0x3F20}, // sign=63, norm=implied
+		Float32: &basicTypeHandler{core.DatatypeFloat, 4, float32ClassBits}, // sign=31, norm=implied
+		Float64: &basicTypeHandler{core.DatatypeFloat, 8, float64ClassBits}, // sign=63, norm=implied
 
 		// String
 		String: &stringTypeHandler{},
@@ -549,6 +549,12 @@ const groupLeafNodeK = 4
 // snodCapacity is the maximum number of entries per SNOD (2*K).
 // Per C reference (H5Gnode.c:598): split when nsyms >= 2 * H5F_SYM_LEAF_K(f).
 const snodCapacity = 2 * groupLeafNodeK // 8
+
+// IEEE 754 float class bit fields: LE, implied-MSB normalization, sign bit position.
+const (
+	float32ClassBits = 0x1F20
+	float64ClassBits = 0x3F20
+)
 
 // groupBTreeK is the group B-tree internal node K (superblock-wide).
 const groupBTreeK = 16
