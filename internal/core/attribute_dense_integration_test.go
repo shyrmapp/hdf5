@@ -14,8 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestReadValue_Int8(t *testing.T) {
-	// Int8 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=1.
+	// Signed 8-bit values decode to []int8.
 	attr := &Attribute{
 		Name: "int8_attr",
 		Datatype: &DatatypeMessage{
@@ -30,14 +29,13 @@ func TestReadValue_Int8(t *testing.T) {
 		Data: []byte{0x01, 0x02, 0x03},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	val, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int8{1, 2, 3}, val)
 }
 
 func TestReadValue_Int16(t *testing.T) {
-	// Int16 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=2.
+	// Signed 16-bit values decode to []int16.
 	attr := &Attribute{
 		Name: "int16_attr",
 		Datatype: &DatatypeMessage{
@@ -52,14 +50,13 @@ func TestReadValue_Int16(t *testing.T) {
 		Data: []byte{0x01, 0x00, 0x02, 0x00},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	val, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int16{1, 2}, val)
 }
 
 func TestReadValue_Uint32(t *testing.T) {
-	// ReadValue returns int32 for all Fixed/size=4 regardless of sign bit.
-	// Unsigned 32-bit values are read as int32 (HDF5 convention in this library).
+	// Unsigned 32-bit values decode to uint32.
 	attr := &Attribute{
 		Name: "uint32_attr",
 		Datatype: &DatatypeMessage{
@@ -82,7 +79,7 @@ func TestReadValue_Uint32(t *testing.T) {
 
 	val, err := attr.ReadValue()
 	require.NoError(t, err)
-	require.Equal(t, []int32{100, 200, 300}, val)
+	require.Equal(t, []uint32{100, 200, 300}, val)
 }
 
 func TestReadValue_Float32(t *testing.T) {
@@ -229,8 +226,9 @@ func TestReadValue_ScalarInt(t *testing.T) {
 	attr := &Attribute{
 		Name: "scalar_int",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceScalar,
@@ -256,8 +254,9 @@ func TestReadValue_ScalarInt64(t *testing.T) {
 	attr := &Attribute{
 		Name: "scalar_int64",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceScalar,
@@ -308,8 +307,9 @@ func TestReadValue_SingleElementArray(t *testing.T) {
 	attr := &Attribute{
 		Name: "single_element",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -332,8 +332,9 @@ func TestReadValue_Int32DataTooShort(t *testing.T) {
 	attr := &Attribute{
 		Name: "short_data",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -351,8 +352,9 @@ func TestReadValue_Int64DataTooShort(t *testing.T) {
 	attr := &Attribute{
 		Name: "short_data_int64",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -421,7 +423,7 @@ func TestReadValue_FixedStringDataTooShort(t *testing.T) {
 
 	_, err := attr.ReadValue()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "data too short for string element")
+	require.Contains(t, err.Error(), "data too short")
 }
 
 func TestReadValue_VarLenStringDataTooShort(t *testing.T) {
@@ -453,8 +455,9 @@ func TestReadValue_NullDataspace(t *testing.T) {
 	attr := &Attribute{
 		Name: "null_ds",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type: DataspaceNull,
@@ -522,8 +525,9 @@ func TestReadValue_Int32LargeArray(t *testing.T) {
 	attr := &Attribute{
 		Name: "large_int32_array",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -550,8 +554,9 @@ func TestReadValue_Int64Array(t *testing.T) {
 	attr := &Attribute{
 		Name: "int64_array",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,

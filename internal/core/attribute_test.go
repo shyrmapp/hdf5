@@ -374,8 +374,9 @@ func TestAttributeReadValue_EmptyAttribute(t *testing.T) {
 	attr := &Attribute{
 		Name: "empty",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Dimensions: []uint64{0}, // 0 elements
@@ -435,8 +436,9 @@ func TestAttributeReadValue_ScalarTypes(t *testing.T) {
 		{
 			name: "scalar int32",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  4,
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: 0x08, // signed
 			},
 			data:      []byte{0x2A, 0x00, 0x00, 0x00}, // 42 in little-endian
 			wantValue: int32(42),
@@ -444,8 +446,9 @@ func TestAttributeReadValue_ScalarTypes(t *testing.T) {
 		{
 			name: "scalar int64",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  8,
+				Class:         DatatypeFixed,
+				Size:          8,
+				ClassBitField: 0x08, // signed
 			},
 			data:      []byte{0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 100
 			wantValue: int64(100),
@@ -500,8 +503,9 @@ func TestAttributeReadValue_ArrayTypes(t *testing.T) {
 		{
 			name: "array of int32",
 			datatype: &DatatypeMessage{
-				Class: DatatypeFixed,
-				Size:  4,
+				Class:         DatatypeFixed,
+				Size:          4,
+				ClassBitField: 0x08, // signed
 			},
 			dimensions: []uint64{3},
 			data: []byte{
@@ -556,8 +560,9 @@ func TestAttributeReadValue_Errors(t *testing.T) {
 			attr: &Attribute{
 				Name: "test",
 				Datatype: &DatatypeMessage{
-					Class: DatatypeFixed,
-					Size:  4,
+					Class:         DatatypeFixed,
+					Size:          4,
+					ClassBitField: 0x08, // signed
 				},
 				Dataspace: &DataspaceMessage{
 					Type:       DataspaceSimple, // CRITICAL: Must set type!

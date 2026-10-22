@@ -164,7 +164,7 @@ func ParseAttributeMessage(data []byte, endianness binary.ByteOrder) (*Attribute
 // data using decode, which reads exactly sizeof(T) bytes. Scalars are unwrapped.
 //
 // typeName only appears in the overflow error message.
-func decodeNumeric[T int32 | int64 | float32 | float64](
+func decodeNumeric[T int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64](
 	a *Attribute, totalElements uint64, isScalar bool, typeName string, decode func([]byte) T,
 ) (interface{}, error) {
 	elemSize := uint64(a.Datatype.Size)
@@ -191,6 +191,38 @@ func decodeNumeric[T int32 | int64 | float32 | float64](
 	return values, nil
 }
 
+// readFixedAttr decodes an integer attribute using the datatype's byte order
+// and signedness, returning the natural Go type (int8..int64, uint8..uint64).
+//
+//nolint:gosec // G115: HDF5 binary format requires same-width sign reinterpretation
+func readFixedAttr(a *Attribute, n uint64, isScalar bool) (interface{}, error) {
+	bo := a.Datatype.GetByteOrder()
+	signed := a.Datatype.IsSignedFixedPoint()
+	switch a.Datatype.Size {
+	case 1:
+		if signed {
+			return decodeNumeric(a, n, isScalar, "int8", func(b []byte) int8 { return int8(b[0]) })
+		}
+		return decodeNumeric(a, n, isScalar, "uint8", func(b []byte) uint8 { return b[0] })
+	case 2:
+		if signed {
+			return decodeNumeric(a, n, isScalar, "int16", func(b []byte) int16 { return int16(bo.Uint16(b)) })
+		}
+		return decodeNumeric(a, n, isScalar, "uint16", bo.Uint16)
+	case 4:
+		if signed {
+			return decodeNumeric(a, n, isScalar, "int32", func(b []byte) int32 { return int32(bo.Uint32(b)) })
+		}
+		return decodeNumeric(a, n, isScalar, "uint32", bo.Uint32)
+	case 8:
+		if signed {
+			return decodeNumeric(a, n, isScalar, "int64", func(b []byte) int64 { return int64(bo.Uint64(b)) })
+		}
+		return decodeNumeric(a, n, isScalar, "uint64", bo.Uint64)
+	}
+	return nil, fmt.Errorf("unsupported datatype class %d or size %d", a.Datatype.Class, a.Datatype.Size)
+}
+
 // ReadValue reads the attribute value as the appropriate Go type.
 func (a *Attribute) ReadValue() (interface{}, error) {
 	if a.Datatype == nil || a.Dataspace == nil {
@@ -209,28 +241,18 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 
 	switch a.Datatype.Class {
 	case DatatypeFixed:
-		switch a.Datatype.Size {
-		case 4:
-			return decodeNumeric(a, totalElements, isScalar, "int32", func(b []byte) int32 {
-				//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-				return int32(binary.LittleEndian.Uint32(b))
-			})
-		case 8:
-			return decodeNumeric(a, totalElements, isScalar, "int64", func(b []byte) int64 {
-				//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-				return int64(binary.LittleEndian.Uint64(b))
-			})
-		}
+		return readFixedAttr(a, totalElements, isScalar)
 
 	case DatatypeFloat:
+		bo := a.Datatype.GetByteOrder()
 		switch a.Datatype.Size {
 		case 4:
 			return decodeNumeric(a, totalElements, isScalar, "float32", func(b []byte) float32 {
-				return math.Float32frombits(binary.LittleEndian.Uint32(b))
+				return math.Float32frombits(bo.Uint32(b))
 			})
 		case 8:
 			return decodeNumeric(a, totalElements, isScalar, "float64", func(b []byte) float64 {
-				return math.Float64frombits(binary.LittleEndian.Uint64(b))
+				return math.Float64frombits(bo.Uint64(b))
 			})
 		}
 
@@ -242,6 +264,10 @@ func (a *Attribute) ReadValue() (interface{}, error) {
 
 		stringSize := uint64(a.Datatype.Size)
 		paddingType := a.Datatype.GetStringPadding()
+		// Bound by the data actually present before allocating.
+		if need, err := utils.SafeMultiply(totalElements, stringSize); err != nil || need > uint64(len(a.Data)) {
+			return nil, fmt.Errorf("attribute data too short for %d strings of %d bytes", totalElements, stringSize)
+		}
 		values := make([]string, totalElements)
 
 		for i := uint64(0); i < totalElements; i++ {
