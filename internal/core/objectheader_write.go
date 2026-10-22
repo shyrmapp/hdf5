@@ -451,9 +451,7 @@ func AddMessageToObjectHeader(oh *ObjectHeader, msgType MessageType, msgData []b
 //   - error: Non-nil if write fails
 //
 // Reference: H5O.c - H5O_flush().
-func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, sb *Superblock) error {
-	_ = sb // Reserved for future use (v1 headers or encoding parameters)
-
+func WriteObjectHeader(w io.WriterAt, addr uint64, oh *ObjectHeader, _ *Superblock) error {
 	if oh == nil {
 		return fmt.Errorf("object header is nil")
 	}

@@ -75,7 +75,7 @@ func (fw *FileWriter) CreateHardLink(linkPath, targetPath string) error {
 	}
 
 	// Increment reference count
-	newRefCount := targetHeader.IncrementReferenceCount()
+	targetHeader.IncrementReferenceCount()
 
 	// Write updated object header back to file
 	if err := writeObjectHeaderWithRefCount(fw, targetAddr, targetHeader); err != nil {
@@ -101,7 +101,6 @@ func (fw *FileWriter) CreateHardLink(linkPath, targetPath string) error {
 	}
 
 	// Success
-	_ = newRefCount // Used for debugging if needed
 	return nil
 }
 

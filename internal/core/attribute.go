@@ -477,7 +477,7 @@ func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Supe
 //   - error: Non-nil if encoding fails
 //
 // Reference: H5Oattr.c - H5O__attr_encode().
-func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) {
+func EncodeAttributeFromStruct(attr *Attribute, _ *Superblock) ([]byte, error) {
 	if attr == nil {
 		return nil, fmt.Errorf("attribute is nil")
 	}
@@ -496,7 +496,6 @@ func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) 
 
 	// Use the existing EncodeAttributeMessage from messages_write.go
 	// It handles all the encoding logic according to HDF5 spec
-	_ = sb // Currently unused, encoding is always little-endian
 
 	return EncodeAttributeMessage(attr.Name, attr.Datatype, attr.Dataspace, attr.Data)
 }

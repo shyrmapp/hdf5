@@ -223,11 +223,9 @@ func (ghw *globalHeapWriter) encodeHeapCollection() []byte {
 		// So free space size must include the 16-byte object header.
 		freeSpaceSize := heap.freeSpace
 		binary.LittleEndian.PutUint64(buf[offset:], freeSpaceSize)
-		offset += 8
 	}
 
 	// Rest of buffer is already zeros (free space)
-	_ = offset // offset tracking complete
 	return buf
 }
 

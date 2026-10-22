@@ -226,18 +226,13 @@ func (a *Allocator) Free(offset, size uint64) error {
 	}
 
 	// Remove from allocated blocks list.
-	removed := false
+	// Sub-blocks that aren't exactly tracked (e.g., chunk data within a larger
+	// allocation) may be freed too; they still go to the free list for reuse.
 	for i, b := range a.blocks {
 		if b.Offset == offset && b.Size == size {
 			a.blocks = append(a.blocks[:i], a.blocks[i+1:]...)
-			removed = true
 			break
 		}
-	}
-	if !removed {
-		// Allow freeing sub-blocks that aren't exactly tracked (e.g., chunk data
-		// within a larger allocation). Still add to free list for future reuse.
-		_ = removed
 	}
 
 	// EOF optimization: if freed block is at the end of file, shrink EOF
