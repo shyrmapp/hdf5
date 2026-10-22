@@ -21,7 +21,7 @@ func readerSize(r io.ReaderAt) (uint64, bool) {
 		}
 	case *os.File:
 		if fi, err := v.Stat(); err == nil && fi.Size() >= 0 {
-			return uint64(fi.Size()), true
+			return uint64(fi.Size()), true //nolint:gosec // G115: value bounded by the enclosing length checks
 		}
 	}
 	return 0, false

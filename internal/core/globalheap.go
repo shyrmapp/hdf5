@@ -133,7 +133,7 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		if objID == 0 {
 			// Free space - nothing follows it that we can parse once it
 			// claims more than the collection holds.
-			remaining := uint64(len(collectionData) - offset - objHeaderSize)
+			remaining := uint64(len(collectionData) - offset - objHeaderSize) //nolint:gosec // G115: value bounded by the enclosing length checks
 			if objSize > remaining {
 				break
 			}
@@ -145,7 +145,7 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 
 		// Read object data.
 		dataStart := offset + objHeaderSize
-		if objSize > uint64(len(collectionData)-dataStart) {
+		if objSize > uint64(len(collectionData)-dataStart) { //nolint:gosec // G115: value bounded by the enclosing length checks
 			return nil, fmt.Errorf("object %d data extends beyond collection", objID)
 		}
 		//nolint:gosec // G115: objSize <= len(collectionData)

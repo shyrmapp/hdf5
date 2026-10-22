@@ -204,7 +204,7 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32, ma
 		// If decompression produces less data than expected, pad with zeros.
 		// This can happen with sparse chunks or chunks at dataset boundaries.
 		if filter.ID == FilterLZF && len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
-			expectedSize := int(min(uint64(filter.ClientData[2]), maxOutput)) //nolint:gosec // G115: clamped to maxOutput <= MaxChunkSize
+			expectedSize := int(min(uint64(filter.ClientData[2]), maxOutput))
 			if len(result) < expectedSize {
 				// Pad with zeros to match expected size
 				padded := make([]byte, expectedSize)

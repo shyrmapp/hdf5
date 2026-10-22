@@ -704,7 +704,7 @@ type btreeV2Geometry struct {
 
 // limitEncSize is H5VM_limit_enc_size: bytes needed to encode values up to n.
 func limitEncSize(n uint64) int {
-	return int(floorLog2(n))/8 + 1
+	return int(floorLog2(n))/8 + 1 //nolint:gosec // G115: value bounded by the enclosing length checks
 }
 
 // maxBTreeV2Depth bounds tree depth; each level multiplies capacity by at
@@ -730,7 +730,7 @@ func newBTreeV2Geometry(nodeSize uint32, recSize, depth, offsetSize int) (*btree
 		if avail < int64(recSize+ptr) {
 			return nil, errors.New("invalid v2 b-tree geometry: node too small for internal node")
 		}
-		m := uint64(avail) / uint64(recSize+ptr)
+		m := uint64(avail) / uint64(recSize+ptr) //nolint:gosec // G115: value bounded by the enclosing length checks
 		g.maxNrec = append(g.maxNrec, m)
 		hi, lo := bits.Mul64(m+1, g.cumMaxNrec[d-1])
 		if hi != 0 || lo+m < lo {
@@ -755,7 +755,7 @@ type btreeV2ChunkWalker struct {
 
 // walk reads the node at addr (holding nrec records at the given depth) and
 // everything below it.
-func (w *btreeV2ChunkWalker) walk(addr uint64, nrec uint64, depth int) error {
+func (w *btreeV2ChunkWalker) walk(addr, nrec uint64, depth int) error {
 	if w.visited[addr] {
 		return fmt.Errorf("v2 b-tree cycle: node at 0x%x visited twice", addr)
 	}
@@ -763,7 +763,7 @@ func (w *btreeV2ChunkWalker) walk(addr uint64, nrec uint64, depth int) error {
 	if nrec > w.geo.maxNrec[depth] {
 		return fmt.Errorf("v2 b-tree node at 0x%x claims %d records, max %d", addr, nrec, w.geo.maxNrec[depth])
 	}
-	recSize := uint64(w.geo.recSize)
+	recSize := uint64(w.geo.recSize) //nolint:gosec // G115: value bounded by the enclosing length checks
 	offU := uint64(w.sb.OffsetSize)
 
 	if depth == 0 {
@@ -781,9 +781,9 @@ func (w *btreeV2ChunkWalker) walk(addr uint64, nrec uint64, depth int) error {
 	// Internal: sig "BTIN"(4) version(1) type(1) records, then nrec+1 child
 	// pointers (address, record count, and for depth > 1 the subtree total),
 	// checksum(4).
-	ptrSize := offU + uint64(w.geo.nrecSize)
+	ptrSize := offU + uint64(w.geo.nrecSize) //nolint:gosec // G115: value bounded by the enclosing length checks
 	if depth > 1 {
-		ptrSize += uint64(limitEncSize(w.geo.cumMaxNrec[depth-1]))
+		ptrSize += uint64(limitEncSize(w.geo.cumMaxNrec[depth-1])) //nolint:gosec // G115: value bounded by the enclosing length checks
 	}
 	buf, err := readIndexBlob(w.r, addr, 6+nrec*recSize+(nrec+1)*ptrSize+4, "BTIN")
 	if err != nil {
@@ -798,7 +798,7 @@ func (w *btreeV2ChunkWalker) walk(addr uint64, nrec uint64, depth int) error {
 	ptrs := buf[6+nrec*recSize:]
 	for i := uint64(0); i <= nrec; i++ {
 		p := ptrs[i*ptrSize:]
-		child := readUint64(p, int(offU), w.sb.Endianness)
+		child := readUint64(p, int(offU), w.sb.Endianness) //nolint:gosec // G115: value bounded by the enclosing length checks
 		childN := readUint64(p[offU:], w.geo.nrecSize, w.sb.Endianness)
 		if err := w.walk(child, childN, depth-1); err != nil {
 			return err
@@ -811,7 +811,7 @@ func (w *btreeV2ChunkWalker) addRecords(recs []byte, nrec uint64) error {
 	if uint64(len(w.entries))+nrec > w.limit {
 		return errors.New("v2 b-tree holds more records than its header declares")
 	}
-	rs := uint64(w.geo.recSize)
+	rs := uint64(w.geo.recSize) //nolint:gosec // G115: value bounded by the enclosing length checks
 	for i := uint64(0); i < nrec; i++ {
 		w.entries = append(w.entries, w.decode(recs[i*rs:(i+1)*rs]))
 	}
