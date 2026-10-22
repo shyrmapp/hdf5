@@ -65,6 +65,15 @@ func TestOpenFile(t *testing.T) {
 	}
 }
 
+// TestOpenFile_NotHDF5 pins the error for a file with no HDF5 signature anywhere.
+func TestOpenFile_NotHDF5(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plain.txt")
+	require.NoError(t, os.WriteFile(path, make([]byte, 2048), 0o600))
+
+	_, err := Open(path)
+	require.EqualError(t, err, "not an HDF5 file")
+}
+
 // TestOpenFile_BadSuperblock tests that a file with a valid HDF5 signature
 // but an unreadable superblock is rejected.
 func TestOpenFile_BadSuperblock(t *testing.T) {

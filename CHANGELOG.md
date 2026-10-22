@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking
 
 - Requires Go 1.27.
+- `File.Reader()` returns an `io.SectionReader` shifted by the base address,
+  not the `*os.File`; type assertions to `*os.File` no longer succeed.
 - `Attribute.ReadValue` returns unsigned Go types (`uint8`..`uint64`) for
   unsigned attributes and `int8`/`int16` for small signed ones; unsigned
   values were previously returned as wrongly-signed `int32`/`int64`.

@@ -104,8 +104,8 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	//nolint:gosec // G115: File size is always positive, safe to convert int64 to uint64
 	if sb.RootGroup >= uint64(fileSize-base) {
 		_ = f.Close()
-		return nil, fmt.Errorf("root group address %d beyond file size %d",
-			sb.RootGroup, fileSize)
+		return nil, fmt.Errorf("root group address %d beyond file size %d (after base address %d)",
+			sb.RootGroup, fileSize-base, base)
 	}
 
 	// For all versions, sb.RootGroup now contains the correct object header address.
