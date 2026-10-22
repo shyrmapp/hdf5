@@ -196,12 +196,10 @@ func TestOHDR_Continuation_H5dump(t *testing.T) {
 	err = fw.Close()
 	require.NoError(t, err)
 
-	// Run h5dump -BH to check header validity.
-	// We don't parse output, just check exit code.
-	// h5dump -BH prints superblock + headers without data.
-	t.Logf("Testing with h5dump: %s", h5dump)
-	// Use exec.Command in a real test; here we just verify the file is valid.
-	f, err := Open(filename)
-	require.NoError(t, err)
-	_ = f.Close()
+	out, err := exec.Command(h5dump, filename).CombinedOutput()
+	require.NoError(t, err, "h5dump failed:\n%s", out)
+	for i := 0; i < 5; i++ {
+		assert.Contains(t, string(out), fmt.Sprintf(`ATTRIBUTE "x_%d"`, i))
+	}
+	assert.Contains(t, string(out), "10, 20, 30")
 }
