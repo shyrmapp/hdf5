@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"unsafe"
@@ -584,6 +585,7 @@ type FileWriter struct {
 	writer   *writer.FileWriter
 	filename string
 	config   *FileWriteConfig // Configuration for write operations
+	readOnly bool             // opened with OpenReadOnly: Close must not write
 
 	// Root group metadata for linking objects
 	rootGroupAddr     uint64 // Address of root group object header
@@ -2210,6 +2212,7 @@ func OpenForWrite(filename string, mode OpenMode, opts ...WriteOption) (*FileWri
 		rootHeaderAllocSz: rootHeaderAllocSz,
 		groups:            make(map[string]*GroupMetadata),
 		headerAllocs:      make(map[uint64]uint64),
+		readOnly:          mode != OpenReadWrite,
 	}
 
 	fileWriter.globalHeapWriter = newGlobalHeapWriter(fileWriter)
@@ -2347,33 +2350,32 @@ func (fw *FileWriter) Close() error {
 		return nil
 	}
 
-	// Flush global heap before closing (for variable-length data)
-	if fw.globalHeapWriter != nil {
-		if err := fw.globalHeapWriter.Flush(); err != nil {
-			return fmt.Errorf("failed to flush global heap: %w", err)
+	// Every step runs and both handles are always closed, whatever fails.
+	var errs []error
+	if !fw.readOnly {
+		// Flush global heap before closing (for variable-length data)
+		if fw.globalHeapWriter != nil {
+			if err := fw.globalHeapWriter.Flush(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to flush global heap: %w", err))
+			}
+		}
+
+		// Rewrite the superblock with the final End-of-File address: allocations
+		// (datasets, attributes, groups) extend the file beyond the EOA written at
+		// creation, and h5py/h5wasm/h5dump fail with "actual len exceeds EOA".
+		if fw.file != nil && fw.file.sb != nil {
+			if err := fw.file.sb.WriteTo(fw.writer, fw.writer.EndOfFile()); err != nil {
+				errs = append(errs, fmt.Errorf("failed to update superblock EOA: %w", err))
+			}
+		}
+
+		if err := fw.writer.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush: %w", err))
 		}
 	}
 
-	// CRITICAL FIX (Issue #22): Rewrite superblock with final End-of-File address.
-	// The superblock EOA is written once at file creation time, but subsequent
-	// allocations (datasets, attributes, groups) extend the file beyond the
-	// initial EOA. Without updating it, h5py/h5wasm/h5dump fail with
-	// "actual len exceeds EOA".
-	if fw.file != nil && fw.file.sb != nil {
-		finalEOF := fw.writer.EndOfFile()
-		if err := fw.file.sb.WriteTo(fw.writer, finalEOF); err != nil {
-			return fmt.Errorf("failed to update superblock EOA: %w", err)
-		}
-	}
-
-	// Flush buffered writes
-	if err := fw.writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush: %w", err)
-	}
-
-	// Close writer
 	if err := fw.writer.Close(); err != nil {
-		return fmt.Errorf("failed to close writer: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
 	}
 
 	// Close the read-side file handle (opened by OpenForWrite via Open()).
@@ -2381,12 +2383,12 @@ func (fw *FileWriter) Close() error {
 	// subsequent file operations.
 	if fw.file != nil {
 		if err := fw.file.Close(); err != nil {
-			return fmt.Errorf("failed to close read handle: %w", err)
+			errs = append(errs, fmt.Errorf("failed to close read handle: %w", err))
 		}
 	}
 
 	fw.writer = nil
-	return nil
+	return errors.Join(errs...)
 }
 
 // initializeFileWriter creates and initializes a new FileWriter with the given mode.

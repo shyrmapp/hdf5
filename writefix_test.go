@@ -111,3 +111,18 @@ func TestHugeAttributeRejected(t *testing.T) {
 	out := h5dumpClean(t, file)
 	require.Contains(t, out, `"fine"`)
 }
+
+func TestOpenForWriteReadOnlyCloses(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/d", Int32, []uint64{2})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{1, 2}))
+	require.NoError(t, fw.Close())
+
+	ro, err := OpenForWrite(file, OpenReadOnly)
+	require.NoError(t, err)
+	require.NoError(t, ro.Close())
+	require.NoError(t, ro.Close(), "second Close is a no-op")
+	_, err = ro.CreateDataset("/x", Int32, []uint64{1})
+	require.Error(t, err)
+}
