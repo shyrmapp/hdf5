@@ -231,11 +231,38 @@ func (g *Group) Attributes() ([]*core.Attribute, error) {
 	return header.Attributes, nil
 }
 
+// sharedGroup loads the group at address once per File. Later paths to the
+// same address (hard-link aliases) get a shell that shares the already-loaded
+// children, so a link diamond costs one load per group, not one per path. A
+// group still being loaded (an ancestor cycle) bypasses the cache so its
+// childless cut-off result is never stored. Groups cached while inside a cycle
+// keep that cycle cut wherever they are reached later.
+func sharedGroup(file *File, address uint64, load func() (*Group, error)) (*Group, error) {
+	if g, ok := file.groupCache[address]; ok {
+		shell := *g
+		return &shell, nil
+	}
+	if file.groupLoading[address] {
+		return load()
+	}
+	file.groupLoading[address] = true
+	g, err := load()
+	delete(file.groupLoading, address)
+	if err == nil {
+		shell := *g
+		file.groupCache[address] = &shell
+	}
+	return g, err
+}
+
 func loadGroup(file *File, address uint64) (*Group, error) {
 	if address == 0 {
 		return nil, errors.New("invalid group address: 0")
 	}
+	return sharedGroup(file, address, func() (*Group, error) { return loadGroupUncached(file, address) })
+}
 
+func loadGroupUncached(file *File, address uint64) (*Group, error) {
 	// Check signature to determine group format.
 	sig := readSignature(file.reader, address)
 
@@ -709,7 +736,7 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 		}
 
 		// Otherwise, treat as a real group.
-		group, err := loadTraditionalGroup(file, address)
+		group, err := sharedGroup(file, address, func() (*Group, error) { return loadTraditionalGroup(file, address) })
 		if err != nil {
 			return nil, err
 		}
@@ -791,21 +818,26 @@ func loadObject(file *File, address uint64, name string) (Object, error) {
 // This is used for v0 files where nested groups have their symbol table info cached
 // in the parent SNOD entry (CacheType=1, H5G_CACHED_STAB).
 func loadGroupWithCachedSymbolTable(file *File, address uint64, name string, btreeAddr, heapAddr uint64) (*Group, error) {
-	group := &Group{
-		file:    file,
-		name:    name,
-		address: address,
-		symbolTable: &structures.SymbolTable{
-			Version:      1,
-			BTreeAddress: btreeAddr,
-			HeapAddress:  heapAddr,
-		},
+	group, err := sharedGroup(file, address, func() (*Group, error) {
+		g := &Group{
+			file:    file,
+			name:    name,
+			address: address,
+			symbolTable: &structures.SymbolTable{
+				Version:      1,
+				BTreeAddress: btreeAddr,
+				HeapAddress:  heapAddr,
+			},
+		}
+		// Load children using the cached symbol table addresses.
+		if err := g.loadChildren(); err != nil {
+			return nil, fmt.Errorf("load children with cached symbol table failed: %w", err)
+		}
+		return g, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	// Load children using the cached symbol table addresses.
-	if err := group.loadChildren(); err != nil {
-		return nil, fmt.Errorf("load children with cached symbol table failed: %w", err)
-	}
-
+	group.name = name
 	return group, nil
 }

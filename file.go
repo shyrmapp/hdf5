@@ -21,9 +21,11 @@ type File struct {
 	reader        io.ReaderAt // osFile shifted by the superblock's base address
 	sb            *core.Superblock
 	root          *Group
-	loadingBTrees map[uint64]bool // B-trees on the current load path, to cut ancestor cycles
-	loadingGroups map[uint64]bool // Groups on the current load path (hard-link cycle guard)
-	maxReadBytes  uint64          // Ceiling for a single whole-dataset read; 0 = default
+	loadingBTrees map[uint64]bool   // B-trees on the current load path, to cut ancestor cycles
+	loadingGroups map[uint64]bool   // Groups on the current load path (hard-link cycle guard)
+	groupCache    map[uint64]*Group // loaded groups by header address; aliases share children
+	groupLoading  map[uint64]bool   // groups mid-load, to keep cycle cut-offs out of groupCache
+	maxReadBytes  uint64            // Ceiling for a single whole-dataset read; 0 = default
 }
 
 // OpenOption configures how a file is opened.
@@ -68,6 +70,14 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 		return nil, fmt.Errorf("file open failed: %w", err)
 	}
 
+	// Release the descriptor if a loader panics (the panic itself propagates).
+	opened := false
+	defer func() {
+		if !opened {
+			_ = f.Close()
+		}
+	}()
+
 	// Get file size for address validation.
 	fi, err := f.Stat()
 	if err != nil {
@@ -95,6 +105,8 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 		sb:            sb,
 		loadingBTrees: make(map[uint64]bool),
 		loadingGroups: make(map[uint64]bool),
+		groupCache:    make(map[uint64]*Group),
+		groupLoading:  make(map[uint64]bool),
 	}
 	for _, opt := range opts {
 		opt(file)
@@ -118,6 +130,7 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	// Ensure root group always has name "/" (may be empty from object header)
 	file.root.name = "/"
 
+	opened = true
 	return file, nil
 }
 
@@ -139,18 +152,30 @@ func (f *File) Root() *Group {
 
 // Walk traverses the entire file structure, calling fn for each object.
 // Objects are visited in depth-first order starting from the root group.
+//
+// A group reachable through several hard links is reported under every path,
+// but its children are only walked under the first path, so a link diamond
+// costs one visit per link rather than one per path (which is exponential in
+// the diamond depth). Use Group.Children on the alias to list them.
 func (f *File) Walk(fn func(path string, obj Object)) {
-	walkGroup(f.root, "/", fn)
+	walkGroup(f.root, "/", fn, map[*Object]bool{})
 }
 
-func walkGroup(g *Group, currentPath string, fn func(string, Object)) {
+func walkGroup(g *Group, currentPath string, fn func(string, Object), walked map[*Object]bool) {
 	fn(currentPath, g)
 
+	// Aliases share one children slice, so its first element identifies it.
+	if len(g.children) > 0 {
+		if walked[&g.children[0]] {
+			return
+		}
+		walked[&g.children[0]] = true
+	}
 	for _, child := range g.Children() {
 		childPath := currentPath + child.Name()
 
 		if childGroup, ok := child.(*Group); ok {
-			walkGroup(childGroup, childPath+"/", fn)
+			walkGroup(childGroup, childPath+"/", fn, walked)
 		} else {
 			fn(childPath, child)
 		}
