@@ -25,6 +25,9 @@ type ObjectHeader struct {
 	Messages   []*HeaderMessage
 	Name       string
 	Attributes []*Attribute
+	// AttributesErr is set when attribute decoding failed (for example a
+	// corrupt dense-storage index); the header itself is still usable.
+	AttributesErr error
 
 	// ReferenceCount tracks the number of hard links to this object.
 	// For V1 headers: Stored directly in header (bytes 4-7).
@@ -60,7 +63,7 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
-	MsgAttributeInfo  MessageType = 15 // Attribute Info (0x000F) - for dense attribute storage
+	MsgAttributeInfo  MessageType = 21 // Attribute Info (0x0015) - for dense attribute storage
 	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
@@ -150,9 +153,9 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	// Parse attributes from messages (both compact and dense)
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
 	if err != nil {
-		// Don't fail the whole header read if attributes fail
-		// Attributes are optional - continue without them
-		_ = err
+		// Keep the header usable (groups and datasets still load) but make
+		// the failure visible to Attributes() callers.
+		header.AttributesErr = err
 	} else {
 		header.Attributes = attributes
 	}
@@ -248,6 +251,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	}
 
 	current += uint64(chunkSizeBytes)
+	if chunkSize > maxHeaderBlock || chunkSize+4 > blockLimit(r, current) {
+		return nil, "", fmt.Errorf("object header chunk size %d exceeds file or limit", chunkSize)
+	}
 	// Per HDF5 C reference (H5Ocache.c:1207, H5Opkg.h:85-107):
 	// chunk_size in file = message data ONLY (does not include checksum).
 	// The 4-byte Jenkins lookup3 checksum follows immediately after the messages.
@@ -262,7 +268,15 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 		msgHeaderSize = 6
 	}
 
+	if err := verifyBlockChecksum(r, headerAddr, end+4, "OHDR"); err != nil {
+		return nil, "", err
+	}
+
 	for current < end {
+		// Trailing bytes too short for a message header are padding.
+		if end-current < msgHeaderSize {
+			break
+		}
 		// Always read 6 bytes - enough for either 4-byte or 6-byte header
 		headerBuf := make([]byte, 6)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
@@ -313,9 +327,13 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	// message data (address + size), but V2 OCHK blocks have a different layout.
 	if sb != nil {
 		continuations := findContinuations(messages, sb)
+		tracker := newContTracker(r)
 		for len(continuations) > 0 {
 			cont := continuations[0]
 			continuations = continuations[1:]
+			if err := tracker.visit(cont); err != nil {
+				return nil, "", err
+			}
 
 			contMessages, contName, err := parseV2ContinuationBlock(r, cont.Address, cont.Size, flags, isBE)
 			if err != nil {
@@ -362,6 +380,10 @@ func parseV2ContinuationBlock(r io.ReaderAt, blockAddr, blockSize uint64, flags 
 	}
 	if string(sigBuf) != "OCHK" {
 		return nil, "", fmt.Errorf("invalid OCHK signature: % x", sigBuf)
+	}
+
+	if err := verifyBlockChecksum(r, blockAddr, blockAddr+blockSize, "OCHK"); err != nil {
+		return nil, "", err
 	}
 
 	// Messages start after "OCHK" (4 bytes) and end before checksum (4 bytes).

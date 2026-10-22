@@ -144,7 +144,7 @@ func ParseLinkMessage(data []byte, sb *core.Superblock) (*LinkMessage, error) {
 	}
 
 	// Name (N bytes).
-	if current+int(nameLen) > len(data) {
+	if nameLen > uint64(len(data)-current) { //nolint:gosec // G115: value bounded by the enclosing length checks
 		return nil, fmt.Errorf("unexpected end of data reading name (need %d bytes, have %d)",
 			nameLen, len(data)-current)
 	}

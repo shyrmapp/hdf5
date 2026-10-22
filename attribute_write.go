@@ -118,7 +118,7 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 				compactCount++
 			}
 		}
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			hasDenseStorage = true
 		}
 	}
@@ -338,7 +338,7 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 		if msg.Type == core.MsgAttribute {
 			compactCount++
 		}
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			// Dense storage was set up by a previous transition -- use it directly.
 			return writeDenseAttribute(fw, objectAddr, freshOH, name, value, sb)
 		}
@@ -462,7 +462,7 @@ func deleteAttribute(fw *FileWriter, objectAddr uint64, name string) error {
 	// Check storage type
 	hasDenseStorage := false
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			hasDenseStorage = true
 			break
 		}
@@ -545,23 +545,36 @@ func deleteCompactAttributeFromHeader(fw *FileWriter, objectAddr uint64, oh *cor
 	return nil
 }
 
-// deleteDenseAttributeFromHeader deletes attribute from dense storage by reading Attribute Info from header.
-func deleteDenseAttributeFromHeader(fw *FileWriter, _ uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
-	// Find Attribute Info Message
-	var attrInfo *core.AttributeInfoMessage
+// hasDenseAttributeInfo reports whether msg is an Attribute Info message that
+// points at dense storage (objects that only track creation order carry the
+// message with undefined addresses and keep their attributes in the header).
+func hasDenseAttributeInfo(msg *core.HeaderMessage, sb *core.Superblock) bool {
+	if msg.Type != core.MsgAttributeInfo {
+		return false
+	}
+	info, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+	return err == nil && info.FractalHeapAddr != 0
+}
+
+// findAttributeInfo parses the object's Attribute Info message, which exists only with dense storage.
+func findAttributeInfo(oh *core.ObjectHeader, sb *core.Superblock) (*core.AttributeInfoMessage, error) {
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgAttributeInfo {
-			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+			attrInfo, err := core.ParseAttributeInfoMessage(msg.Data, sb)
 			if err != nil {
-				return fmt.Errorf("failed to parse attribute info message: %w", err)
+				return nil, fmt.Errorf("failed to parse attribute info message: %w", err)
 			}
-			attrInfo = parsed
-			break
+			return attrInfo, nil
 		}
 	}
+	return nil, fmt.Errorf("attribute info message not found (dense storage not initialized)")
+}
 
-	if attrInfo == nil {
-		return fmt.Errorf("attribute info message not found")
+// deleteDenseAttributeFromHeader deletes attribute from dense storage by reading Attribute Info from header.
+func deleteDenseAttributeFromHeader(fw *FileWriter, _ uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
+	attrInfo, err := findAttributeInfo(oh, sb)
+	if err != nil {
+		return err
 	}
 
 	// Delete attribute from dense storage
@@ -625,31 +638,17 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 // (i.e., files that were created, closed, and reopened).
 //
 // Reference: H5Adense.c - H5A__dense_insert().
-//
-//nolint:gocyclo,cyclop // Complex RMW logic with multiple verification steps
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
-	var attrInfo *core.AttributeInfoMessage
-	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
-			// Parse the message data
-			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
-			if err != nil {
-				return fmt.Errorf("failed to parse attribute info message: %w", err)
-			}
-			attrInfo = parsed
-			break
-		}
-	}
-
-	if attrInfo == nil {
-		return fmt.Errorf("attribute info message not found (dense storage not initialized)")
+	attrInfo, err := findAttributeInfo(oh, sb)
+	if err != nil {
+		return err
 	}
 
 	// Step 2: Load existing fractal heap from file
 	heap := structures.NewWritableFractalHeap(64 * 1024) // Match size from dense attribute writer
-	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
+	err = heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load fractal heap: %w", err)
 	}

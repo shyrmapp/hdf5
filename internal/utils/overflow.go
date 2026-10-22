@@ -79,8 +79,8 @@ func ValidateHyperslabBounds(start, count, stride, dims []uint64) error {
 			return fmt.Errorf("hyperslab stride overflow at dimension %d: %w", i, err)
 		}
 
-		endIndex := start[i] + maxIndex
-		if endIndex >= dims[i] {
+		// Overflow-safe form of start+maxIndex >= dim.
+		if start[i] >= dims[i] || maxIndex >= dims[i]-start[i] {
 			return fmt.Errorf("hyperslab selection exceeds dataset bounds at dimension %d: start=%d, count=%d, stride=%d, dim_size=%d",
 				i, start[i], count[i], stride[i], dims[i])
 		}

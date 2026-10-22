@@ -1,6 +1,9 @@
-// Package hdf5 provides a pure Go implementation for reading HDF5 files.
-// It supports HDF5 format versions 0, 2, and 3, with capabilities for
-// reading datasets, groups, attributes, and various data layouts.
+// Package hdf5 is a pure Go reader and writer for HDF5 files (superblock
+// versions 0, 2 and 3), covering datasets, groups, attributes and links.
+//
+// Open reads a file; whole-dataset reads are capped at 1 GiB by default, see
+// WithMaxReadBytes. A File is not safe for concurrent use; separate Files are
+// independent. CreateForWrite and OpenForWrite return a FileWriter.
 package hdf5
 
 import (
@@ -17,7 +20,7 @@ type File struct {
 	osFile        *os.File
 	sb            *core.Superblock
 	root          *Group
-	visitedBTrees map[uint64]bool // Track visited B-tree addresses to prevent cycles
+	loadingBTrees map[uint64]bool // B-trees on the current load path, to cut ancestor cycles
 	loadingGroups map[uint64]bool // Groups on the current load path (hard-link cycle guard)
 	maxReadBytes  uint64          // Ceiling for a single whole-dataset read; 0 = default
 }
@@ -87,7 +90,7 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	file := &File{
 		osFile:        f,
 		sb:            sb,
-		visitedBTrees: make(map[uint64]bool),
+		loadingBTrees: make(map[uint64]bool),
 		loadingGroups: make(map[uint64]bool),
 	}
 	for _, opt := range opts {

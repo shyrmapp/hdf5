@@ -9,6 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dense attributes are read.** The Attribute Info message was matched as
+  type 0x000F (Shared Message Table) instead of 0x0015, and its optional
+  creation-order field was parsed as 4 bytes instead of 2, so every object with
+  more than 8 attributes (netCDF-4 / HDF5 1.8+ files) returned 0 attributes with
+  no error. Reader and writer are fixed. Failures decoding attributes now
+  surface from `Attributes()` instead of yielding an empty list.
+- **Dense links and attributes in larger groups.** One shared read path
+  (`ReadDenseHeapObjects`) now handles fractal heaps whose root is an indirect
+  block (multi-level), B-tree v2 of any depth (internal `BTIN` nodes), the real
+  attribute name/creation-order record layouts (types 8 and 9), and tiny heap
+  IDs. Groups with ~30+ links no longer fail with "invalid direct block
+  signature FHIB" / "btree v2 depth 1 unsupported". Heaps with I/O filters and
+  huge objects indexed through a separate B-tree remain unsupported (clear
+  error).
+- **Group loading no longer drops children silently.** An error loading a
+  child object (or parsing a dense link record) fails the load with the child's
+  name instead of omitting the child and its whole subtree. This exposed a
+  padding bug: v2 object headers whose last message leaves fewer bytes than a
+  message header are now parsed (netCDF dimension-scale datasets were dropped
+  from `dense_links.h5`, which has 17 links, not 16).
+- **Hard-linked groups are listed under every name.** Cycle protection for
+  symbol-table groups tracked every B-tree ever visited, so a group reachable
+  under two names was empty on the second path. It now cuts only true ancestor
+  loops.
+- **Dense attributes written by this library are readable by the HDF5 C
+  library** (`h5dump`, `h5ls`): attribute name index uses B-tree record type 8,
+  fractal-heap direct blocks carry their checksum in the header with heap
+  offsets counted from the block start, and unused heap addresses are written
+  as undefined rather than 0.
+
+- **Fill values.** Fill value messages (types 4 and 5) are parsed and missing
+  chunks, unallocated contiguous storage and never-written datasets read as the
+  fill value instead of 0 or a "negative offset" error. netCDF-4 variables that
+  were never written now return `NC_FILL`.
+- **Contiguous `ReadSlice`/`ReadHyperslab` return the right data.** The fast
+  path treated any selection with a full last dimension as one linear run, so
+  multi-dimensional partial selections and strided selections returned wrong
+  elements. `ReadSlice` bounds checks no longer overflow.
+- **`WithMaxReadBytes` is checked before allocating** in `ReadSlice` and
+  `ChunkIterator`, so a tiny file declaring huge dimensions errors instead of
+  allocating gigabytes first.
+- **`Attribute.ReadValue`** honours byte order and signedness and supports
+  1- and 2-byte integers.
+- **Superblock v2/v3** sizes are decoded per spec; files with 4-byte offsets
+  open. Superblock v0 root entry offsets follow the file's offset size.
+- **Malformed files fail with an error instead of killing the process:**
+  self-referencing B-tree nodes and object header continuation chains, oversized
+  global heap collections and objects, link name lengths, short dataspace
+  messages, LZF padding and chunk-index preallocation are all bounded.
+  Object header and chunk-index checksums are verified.
+- **More real files open:** filter pipeline message v2, paged fixed-array chunk
+  indexes and chunk B-tree v2 of any depth. Paged extensible-array data blocks
+  remain unsupported (clear error).
+
+### Breaking
+
+- Requires Go 1.27.
+- `Attribute.ReadValue` returns unsigned Go types (`uint8`..`uint64`) for
+  unsigned attributes and `int8`/`int16` for small signed ones; unsigned
+  values were previously returned as wrongly-signed `int32`/`int64`.
+- A file whose child objects cannot be loaded now fails to open or list
+  instead of silently omitting them.
+- Files with dense attribute storage written by earlier versions of this
+  library are no longer readable by this version (the Attribute Info message
+  type, heap layout and index record layout changed to match the file format).
+  The C library never read them either. Rewrite such files with this version.
+
 ---
 
 ## [v0.17.1] - 2026-09-23

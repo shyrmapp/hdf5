@@ -61,7 +61,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 
 	// For group B-trees (type 0), the data after header is:
 	// - Keys and children interleaved: Key[0], Child[0], Key[1], Child[1], ..., Key[N]
-	// - Keys are heap offsets (offsetSize bytes each)
+	// - Keys are heap offsets (lengthSize bytes each)
 	// - Children are SNOD addresses (offsetSize bytes each)
 	// - There are (entriesUsed) children and (entriesUsed+1) keys (but last key might be empty)
 	//
@@ -72,12 +72,14 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	// Pattern: Key[0], Child[0], Key[1], Child[1], ..., Key[entriesUsed], (last child if internal node)
 	// For leaf nodes with N children: N+1 keys and N children
 	// But we read as pairs: (key, child) repeated
-	dataSize := int(entriesUsed) * 2 * int(sb.OffsetSize) // entriesUsed children + keys interleaved
-	data := make([]byte, dataSize+int(sb.OffsetSize))     // +1 key at end
+	// Keys are lengthSize bytes, children offsetSize bytes.
+	keySize := int(sb.LengthSize)
+	dataSize := int(entriesUsed) * (keySize + int(sb.OffsetSize)) // entriesUsed children + keys interleaved
+	data := make([]byte, dataSize+keySize)                        // +1 key at end
 
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	dataOffset := int64(address) + int64(headerSize)
-	if _, err := r.ReadAt(data[:dataSize+int(sb.OffsetSize)], dataOffset); err != nil {
+	if _, err := r.ReadAt(data, dataOffset); err != nil {
 		return nil, fmt.Errorf("b-tree data read failed: %w", err)
 	}
 
@@ -86,7 +88,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	pos := 0
 	for i := uint16(0); i < entriesUsed; i++ {
 		// Skip key (heap offset) - we don't need it for enumeration
-		pos += int(sb.OffsetSize)
+		pos += keySize
 
 		// Read child address (SNOD) using file's endianness
 		childAddr := readAddress(data[pos:], int(sb.OffsetSize), sb.Endianness)

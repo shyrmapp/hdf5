@@ -33,6 +33,12 @@ const (
 	BTreeV2LeafSignature   = "BTLF" // B-tree v2 leaf node signature
 
 	BTreeV2TypeLinkNameIndex = uint8(5) // Type 5 = Link Name Index for dense groups
+	// BTreeV2TypeAttrNameIndex is the attribute name index (H5A_BT2_NAME):
+	// records are heap ID (8), message flags (1), creation order (4), name hash (4).
+	BTreeV2TypeAttrNameIndex = uint8(8)
+
+	linkRecordSize = 11
+	attrRecordSize = 17
 
 	DefaultBTreeV2NodeSize     = uint32(4096) // 4KB default node size
 	DefaultBTreeV2SplitPercent = uint8(100)   // Split at 100% full
@@ -143,6 +149,16 @@ type WritableBTreeV2 struct {
 // Returns:
 //   - *WritableBTreeV2: B-tree structure ready for record insertion
 func NewWritableBTreeV2(nodeSize uint32) *WritableBTreeV2 {
+	return newWritableBTreeV2(nodeSize, BTreeV2TypeLinkNameIndex, linkRecordSize)
+}
+
+// NewWritableAttributeBTreeV2 creates a B-tree v2 for the dense attribute name
+// index (record type 8), the layout the HDF5 C library expects.
+func NewWritableAttributeBTreeV2(nodeSize uint32) *WritableBTreeV2 {
+	return newWritableBTreeV2(nodeSize, BTreeV2TypeAttrNameIndex, attrRecordSize)
+}
+
+func newWritableBTreeV2(nodeSize uint32, recType uint8, recSize uint16) *WritableBTreeV2 {
 	if nodeSize == 0 {
 		nodeSize = DefaultBTreeV2NodeSize
 	}
@@ -151,10 +167,10 @@ func NewWritableBTreeV2(nodeSize uint32) *WritableBTreeV2 {
 		header: &BTreeV2Header{
 			Signature:      [4]byte{'B', 'T', 'H', 'D'},
 			Version:        0,
-			Type:           BTreeV2TypeLinkNameIndex,
+			Type:           recType,
 			NodeSize:       nodeSize,
-			RecordSize:     11, // 4 bytes hash + 7 bytes heap ID
-			Depth:          0,  // Single leaf
+			RecordSize:     recSize,
+			Depth:          0, // Single leaf
 			SplitPercent:   DefaultBTreeV2SplitPercent,
 			MergePercent:   DefaultBTreeV2MergePercent,
 			RootNodeAddr:   0, // Set when writing
@@ -164,7 +180,7 @@ func NewWritableBTreeV2(nodeSize uint32) *WritableBTreeV2 {
 		leaf: &BTreeV2LeafNode{
 			Signature: [4]byte{'B', 'T', 'L', 'F'},
 			Version:   0,
-			Type:      BTreeV2TypeLinkNameIndex,
+			Type:      recType,
 			Records:   make([]LinkNameRecord, 0),
 		},
 		records:  make([]LinkNameRecord, 0),
@@ -553,13 +569,17 @@ func (bt *WritableBTreeV2) encodeLeafNode(sb *core.Superblock) ([]byte, error) {
 	buf[offset] = bt.leaf.Type
 	offset++
 
-	// Records (each record is 11 bytes: 4 bytes hash + 7 bytes heap ID)
 	for _, record := range bt.leaf.Records {
-		// Name Hash (4 bytes)
+		if bt.header.Type == BTreeV2TypeAttrNameIndex {
+			// heap ID (8, last byte zero), flags (1), creation order (4), hash (4)
+			copy(buf[offset:], record.HeapID[:])
+			binary.LittleEndian.PutUint32(buf[offset+13:], record.NameHash)
+			offset += attrRecordSize
+			continue
+		}
+		// Link name record: hash (4), heap ID (7)
 		binary.LittleEndian.PutUint32(buf[offset:], record.NameHash)
 		offset += 4
-
-		// Heap ID (7 bytes)
 		copy(buf[offset:], record.HeapID[:])
 		offset += 7
 	}
@@ -581,7 +601,7 @@ func (bt *WritableBTreeV2) calculateHeaderSize(sb *core.Superblock) uint64 {
 // calculateLeafSize calculates the size of the leaf node.
 func (bt *WritableBTreeV2) calculateLeafSize(_ *core.Superblock) uint64 {
 	numRecords := len(bt.leaf.Records)
-	return uint64(4 + 1 + 1 + (numRecords * 11) + 4)
+	return uint64(4+1+1+4) + uint64(numRecords)*uint64(bt.header.RecordSize)
 	// Signature + Version + Type + Records + Checksum
 }
 
@@ -590,8 +610,7 @@ func (bt *WritableBTreeV2) calculateMaxRecords() int {
 	// Node size - overhead (signature + version + type + checksum)
 	overhead := uint32(4 + 1 + 1 + 4) // 10 bytes
 	available := bt.nodeSize - overhead
-	recordSize := uint32(11) // 4 bytes hash + 7 bytes heap ID
-	return int(available / recordSize)
+	return int(available / uint32(bt.header.RecordSize))
 }
 
 // insertRecordSorted inserts a record into a sorted slice by hash.
@@ -612,27 +631,6 @@ func insertRecordSorted(records []LinkNameRecord, newRecord LinkNameRecord) []Li
 	records[insertPos] = newRecord
 
 	return records
-}
-
-// compareLinkNames compares two link names lexicographically.
-//
-// This matches HDF5's comparison in H5G__dense_btree2_name_compare().
-// HDF5 uses strcmp(), which performs UTF-8 lexicographic comparison.
-//
-// Returns:
-//   - -1 if a < b
-//   - 0 if a == b
-//   - 1 if a > b
-//
-// Reference: H5Gbtree2.c - H5G__dense_btree2_name_compare().
-func compareLinkNames(a, b string) int {
-	// Go's string comparison is UTF-8 lexicographic (same as strcmp)
-	if a < b {
-		return -1
-	} else if a > b {
-		return 1
-	}
-	return 0
 }
 
 // LoadFromFile loads an existing B-tree v2 from file.
@@ -668,8 +666,12 @@ func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *co
 	}
 
 	// 2. Validate header
-	if header.Type != BTreeV2TypeLinkNameIndex {
-		return fmt.Errorf("%w: expected type %d, got %d", ErrInvalidBTreeType, BTreeV2TypeLinkNameIndex, header.Type)
+	if header.Type != BTreeV2TypeLinkNameIndex && header.Type != BTreeV2TypeAttrNameIndex {
+		return fmt.Errorf("%w: expected type %d or %d, got %d", ErrInvalidBTreeType,
+			BTreeV2TypeLinkNameIndex, BTreeV2TypeAttrNameIndex, header.Type)
+	}
+	if int(header.RecordSize) != linkRecordSize && int(header.RecordSize) != attrRecordSize {
+		return fmt.Errorf("unsupported B-tree record size %d", header.RecordSize)
 	}
 
 	if header.Depth != 0 {
@@ -686,7 +688,7 @@ func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *co
 
 	// 5. Read and decode leaf node (if not empty)
 	if header.NumRecordsRoot > 0 {
-		leaf, records, err := readBTreeV2LeafNode(r, header.RootNodeAddr, int(header.NumRecordsRoot), sb)
+		leaf, records, err := readBTreeV2LeafNode(r, header.RootNodeAddr, int(header.NumRecordsRoot), header.Type, sb)
 		if err != nil {
 			return fmt.Errorf("failed to read leaf node: %w", err)
 		}
@@ -698,7 +700,7 @@ func (bt *WritableBTreeV2) LoadFromFile(r io.ReaderAt, headerAddr uint64, sb *co
 		bt.leaf = &BTreeV2LeafNode{
 			Signature: [4]byte{'B', 'T', 'L', 'F'},
 			Version:   0,
-			Type:      BTreeV2TypeLinkNameIndex,
+			Type:      header.Type,
 			Records:   make([]LinkNameRecord, 0),
 		}
 		bt.records = make([]LinkNameRecord, 0)
@@ -820,9 +822,13 @@ func readBTreeV2Header(r io.ReaderAt, address uint64, sb *core.Superblock) (*BTr
 //   - Type: 5 (1 byte)
 //   - Records: Array of link name records (numRecords * 11 bytes)
 //   - Checksum: CRC32 (4 bytes)
-func readBTreeV2LeafNode(r io.ReaderAt, address uint64, numRecords int, _ *core.Superblock) (*BTreeV2LeafNode, []LinkNameRecord, error) {
+func readBTreeV2LeafNode(r io.ReaderAt, address uint64, numRecords int, recType uint8, _ *core.Superblock) (*BTreeV2LeafNode, []LinkNameRecord, error) {
+	recSize := linkRecordSize
+	if recType == BTreeV2TypeAttrNameIndex {
+		recSize = attrRecordSize
+	}
 	// Calculate leaf size
-	size := 4 + 1 + 1 + (numRecords * 11) + 4
+	size := 4 + 1 + 1 + (numRecords * recSize) + 4
 
 	// Read leaf data
 	buf := make([]byte, size)
@@ -859,14 +865,17 @@ func readBTreeV2LeafNode(r io.ReaderAt, address uint64, numRecords int, _ *core.
 	// Records (each record is 11 bytes: 4 bytes hash + 7 bytes heap ID)
 	records := make([]LinkNameRecord, numRecords)
 	for i := 0; i < numRecords; i++ {
-		// Name Hash (4 bytes)
-		nameHash := binary.LittleEndian.Uint32(buf[offset : offset+4])
-		offset += 4
-
-		// Heap ID (7 bytes)
+		var nameHash uint32
 		var heapID [7]byte
-		copy(heapID[:], buf[offset:offset+7])
-		offset += 7
+		if recType == BTreeV2TypeAttrNameIndex {
+			copy(heapID[:], buf[offset:offset+7])
+			nameHash = binary.LittleEndian.Uint32(buf[offset+13 : offset+17])
+			offset += attrRecordSize
+		} else {
+			nameHash = binary.LittleEndian.Uint32(buf[offset : offset+4])
+			copy(heapID[:], buf[offset+4:offset+11])
+			offset += linkRecordSize
+		}
 
 		records[i] = LinkNameRecord{
 			NameHash: nameHash,

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/bits"
 
 	"github.com/shyrmapp/hdf5/internal/utils"
 )
@@ -41,7 +43,7 @@ func CollectChunksV4(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 	case ChunkIndexSingle:
 		return singleChunkEntries(layout, grid), nil
 	case ChunkIndexImplicit:
-		return implicitChunkEntries(layout, grid), nil
+		return implicitChunkEntries(r, layout, grid)
 	case ChunkIndexFixed:
 		return fixedArrayChunkEntries(r, layout, sb, grid)
 	case ChunkIndexExt:
@@ -59,7 +61,11 @@ func CollectChunksV4(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 func (dl *DataLayoutMessage) chunkStoreBytes() uint64 {
 	size := uint64(1)
 	for _, d := range dl.ChunkSize {
-		size *= d
+		hi, lo := bits.Mul64(size, d)
+		if hi != 0 {
+			return math.MaxUint64 // saturate; size checks downstream reject it
+		}
+		size = lo
 	}
 	return size
 }
@@ -75,19 +81,29 @@ func chunkGridDims(dims, chunkDims []uint64) ([]uint64, error) {
 		if chunkDims[i] == 0 {
 			return nil, fmt.Errorf("zero-size chunk dimension %d", i)
 		}
-		grid[i] = (d + chunkDims[i] - 1) / chunkDims[i]
+		grid[i] = d / chunkDims[i]
+		if d%chunkDims[i] != 0 {
+			grid[i]++
+		}
 	}
 	return grid, nil
 }
 
 // gridChunkCount returns the total number of chunk slots in the grid.
-func gridChunkCount(grid []uint64) uint64 {
+func gridChunkCount(grid []uint64) (uint64, error) {
 	n := uint64(1)
 	for _, g := range grid {
-		n *= g
+		var err error
+		if n, err = utils.SafeMultiply(n, g); err != nil {
+			return 0, fmt.Errorf("chunk grid too large: %w", err)
+		}
 	}
-	return n
+	return n, nil
 }
+
+// maxUnsizedEntries caps implicit-index entries when the reader cannot report
+// the file size.
+const maxUnsizedEntries = 1 << 24
 
 // linearToScaled converts a row-major linear chunk index into per-dimension
 // chunk grid coordinates.
@@ -126,6 +142,9 @@ func readIndexBlob(r io.ReaderAt, addr, totalSize uint64, sig string) ([]byte, e
 	if err := utils.ValidateBufferSize(totalSize, utils.MaxChunkSize, "chunk index block"); err != nil {
 		return nil, fmt.Errorf("chunk index block at 0x%x: %w", addr, err)
 	}
+	if totalSize < 10 || totalSize > blockLimit(r, addr) {
+		return nil, fmt.Errorf("%s block at 0x%x of %d bytes exceeds file", sig, addr, totalSize)
+	}
 	buf := make([]byte, totalSize)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
 	if _, err := r.ReadAt(buf, int64(addr)); err != nil {
@@ -136,6 +155,9 @@ func readIndexBlob(r io.ReaderAt, addr, totalSize uint64, sig string) ([]byte, e
 	}
 	if buf[4] != 0 {
 		return nil, fmt.Errorf("unsupported %s version: %d", sig, buf[4])
+	}
+	if err := verifyChecksum(buf, sig, addr); err != nil {
+		return nil, err
 	}
 	return buf, nil
 }
@@ -158,10 +180,21 @@ func singleChunkEntries(layout *DataLayoutMessage, grid []uint64) []ChunkLocatio
 // implicitChunkEntries builds the chunk list of an Implicit index: chunks are
 // stored contiguously in row-major chunk order starting at the index address,
 // with no per-chunk metadata (H5Dnone.c). Implicit indexes are never filtered.
-func implicitChunkEntries(layout *DataLayoutMessage, grid []uint64) []ChunkLocation {
+func implicitChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, grid []uint64) ([]ChunkLocation, error) {
 	chunkBytes := layout.chunkStoreBytes()
-	n := gridChunkCount(grid)
-	entries := make([]ChunkLocation, 0, n)
+	n, err := gridChunkCount(grid)
+	if err != nil {
+		return nil, err
+	}
+	// All chunks are stored contiguously, so they must fit in the file.
+	total, err := utils.SafeMultiply(n, chunkBytes)
+	if err != nil || total > blockLimit(r, layout.DataAddress) {
+		return nil, fmt.Errorf("implicit chunk index: %d chunks of %d bytes do not fit in file", n, chunkBytes)
+	}
+	if _, known := readerSize(r); !known && n > maxUnsizedEntries {
+		return nil, fmt.Errorf("implicit chunk index: %d chunks exceed limit", n)
+	}
+	entries := make([]ChunkLocation, 0, min(n, 4096))
 	for i := uint64(0); i < n; i++ {
 		entries = append(entries, ChunkLocation{
 			Scaled:  linearToScaled(i, grid),
@@ -169,7 +202,7 @@ func implicitChunkEntries(layout *DataLayoutMessage, grid []uint64) []ChunkLocat
 			NBytes:  chunkBytes,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // decodeChunkElement decodes one fixed/extensible array element into a chunk
@@ -211,6 +244,7 @@ type fixedArrayHeader struct {
 	entrySize uint64
 	maxNelmts uint64
 	dblkAddr  uint64
+	pageBits  uint8
 }
 
 // parseFixedArrayHeader reads and validates a Fixed Array header ("FAHD"):
@@ -230,13 +264,13 @@ func parseFixedArrayHeader(r io.ReaderAt, addr uint64, sb *Superblock) (*fixedAr
 		maxNelmts: readUint64(buf[8:], lengthSize, sb.Endianness),
 		dblkAddr:  readUint64(buf[8+lengthSize:], int(sb.OffsetSize), sb.Endianness),
 	}
-	pageBits := buf[7]
+	hdr.pageBits = buf[7]
 
 	if hdr.entrySize == 0 {
 		return nil, errors.New("invalid fixed array entry size")
 	}
-	if pageBits < 64 && hdr.maxNelmts > uint64(1)<<pageBits {
-		return nil, errors.New("paged fixed array data blocks not yet supported")
+	if hdr.pageBits == 0 || hdr.pageBits > 32 {
+		return nil, fmt.Errorf("invalid fixed array page bits: %d", hdr.pageBits)
 	}
 	return hdr, nil
 }
@@ -252,30 +286,89 @@ func fixedArrayChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *Superb
 		return nil, nil
 	}
 
-	// Data block: sig(4) version(1) client(1) header addr(offsetSize)
-	// elements(maxNelmts x entrySize) checksum(4). (No page bitmap: unpaged.)
-	dblkHdrSize := uint64(6) + uint64(sb.OffsetSize)
-	eltBytes, err := utils.SafeMultiply(hdr.maxNelmts, hdr.entrySize)
-	if err != nil {
-		return nil, fmt.Errorf("fixed array size overflow: %w", err)
-	}
-	dblk, err := readIndexBlob(r, hdr.dblkAddr, dblkHdrSize+eltBytes+4, "FADB")
+	nChunks, err := gridChunkCount(grid)
 	if err != nil {
 		return nil, err
 	}
-	if dblk[5] != hdr.clientID {
-		return nil, fmt.Errorf("fixed array client id mismatch: header %d, data block %d", hdr.clientID, dblk[5])
+	nChunks = min(nChunks, hdr.maxNelmts)
+
+	// Data block: sig(4) version(1) client(1) header addr(offsetSize)
+	// then either the elements (maxNelmts x entrySize) when unpaged, or a page
+	// init bitmap when paged, then checksum(4).
+	dblkHdrSize := uint64(6) + uint64(sb.OffsetSize)
+	pageNelmts := uint64(1) << hdr.pageBits
+	if hdr.maxNelmts <= pageNelmts {
+		eltBytes, err := utils.SafeMultiply(hdr.maxNelmts, hdr.entrySize)
+		if err != nil {
+			return nil, fmt.Errorf("fixed array size overflow: %w", err)
+		}
+		dblk, err := readIndexBlob(r, hdr.dblkAddr, dblkHdrSize+eltBytes+4, "FADB")
+		if err != nil {
+			return nil, err
+		}
+		if dblk[5] != hdr.clientID {
+			return nil, fmt.Errorf("fixed array client id mismatch: header %d, data block %d", hdr.clientID, dblk[5])
+		}
+		return decodeFixedArrayElements(dblk[dblkHdrSize:], 0, nChunks, hdr, sb, layout, grid, nil)
 	}
 
-	nChunks := gridChunkCount(grid)
-	if hdr.maxNelmts < nChunks {
-		nChunks = hdr.maxNelmts
+	// Paged: the prefix is followed by npages pages of (pageNelmts x
+	// entrySize + 4-byte checksum) each (H5FAdblock.c / H5FAcache.c); the
+	// last page holds the remainder. Pages whose bitmap bit is clear were never
+	// written and hold only undefined addresses.
+	npages := (hdr.maxNelmts + pageNelmts - 1) / pageNelmts
+	bitmapBytes := (npages + 7) / 8
+	prefix, err := readIndexBlob(r, hdr.dblkAddr, dblkHdrSize+bitmapBytes+4, "FADB")
+	if err != nil {
+		return nil, err
 	}
+	if prefix[5] != hdr.clientID {
+		return nil, fmt.Errorf("fixed array client id mismatch: header %d, data block %d", hdr.clientID, prefix[5])
+	}
+	bitmap := prefix[dblkHdrSize : dblkHdrSize+bitmapBytes]
+	pageStride := pageNelmts*hdr.entrySize + 4
+	firstPage := hdr.dblkAddr + dblkHdrSize + bitmapBytes + 4
 
-	entries := make([]ChunkLocation, 0, nChunks)
-	for i := uint64(0); i < nChunks; i++ {
-		off := dblkHdrSize + i*hdr.entrySize
-		entry, ok, err := decodeChunkElement(dblk[off:off+hdr.entrySize], hdr.clientID, sb, layout)
+	var entries []ChunkLocation
+	for p := uint64(0); p*pageNelmts < nChunks; p++ {
+		if bitmap[p/8]&(0x80>>(p%8)) == 0 {
+			continue
+		}
+		count := min(pageNelmts, hdr.maxNelmts-p*pageNelmts)
+		page, err := readPageBlob(r, firstPage+p*pageStride, count*hdr.entrySize+4)
+		if err != nil {
+			return nil, fmt.Errorf("fixed array page %d: %w", p, err)
+		}
+		got, err := decodeFixedArrayElements(page, p*pageNelmts, min(nChunks, p*pageNelmts+count), hdr, sb, layout, grid, entries)
+		if err != nil {
+			return nil, err
+		}
+		entries = got
+	}
+	return entries, nil
+}
+
+// readPageBlob reads a signature-less metadata page ending in a checksum.
+func readPageBlob(r io.ReaderAt, addr, size uint64) ([]byte, error) {
+	if size < 4 || size > blockLimit(r, addr) || size > utils.MaxChunkSize {
+		return nil, fmt.Errorf("page at 0x%x of %d bytes exceeds file", addr, size)
+	}
+	buf := make([]byte, size)
+	if _, err := r.ReadAt(buf, int64(addr)); err != nil { //nolint:gosec // G115: bounded by file size
+		return nil, err
+	}
+	if err := verifyChecksum(buf, "FA page", addr); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// decodeFixedArrayElements decodes elements [first, end) of a fixed array from
+// elts (which starts at element first) and appends them to entries.
+func decodeFixedArrayElements(elts []byte, first, end uint64, hdr *fixedArrayHeader, sb *Superblock, layout *DataLayoutMessage, grid []uint64, entries []ChunkLocation) ([]ChunkLocation, error) {
+	for i := first; i < end; i++ {
+		off := (i - first) * hdr.entrySize
+		entry, ok, err := decodeChunkElement(elts[off:off+hdr.entrySize], hdr.clientID, sb, layout)
 		if err != nil {
 			return nil, fmt.Errorf("fixed array element %d: %w", i, err)
 		}
@@ -318,7 +411,7 @@ func newExtArrayInfo(clientID, eltSize, maxNelmtsBits, idxBlkElmts, dataBlkMinEl
 	if eltSize == 0 || dmin == 0 || smin < 2 || dmin&(dmin-1) != 0 || smin&(smin-1) != 0 {
 		return nil, errors.New("invalid extensible array creation parameters")
 	}
-	if maxNelmtsBits == 0 || maxNelmtsBits > 64 {
+	if maxNelmtsBits == 0 || maxNelmtsBits > 48 { // HDF5 chunk indexes use 32
 		return nil, fmt.Errorf("invalid extensible array max nelmts bits: %d", maxNelmtsBits)
 	}
 
@@ -363,6 +456,7 @@ type extArrayWalker struct {
 	iblk      []byte
 	dblkCache map[uint64][]byte
 	sblkCache map[uint64][]byte
+	skipTo    uint64 // When element reports ok=false: first index past the unallocated range.
 }
 
 // element returns the raw element bytes for array index idx, or ok=false when
@@ -371,6 +465,7 @@ func (w *extArrayWalker) element(idx uint64) ([]byte, bool, error) {
 	info := w.info
 	offU := uint64(w.sb.OffsetSize)
 	iblkHdrSize := 6 + offU
+	w.skipTo = idx + 1
 
 	if idx < info.idxBlkElmts {
 		off := iblkHdrSize + idx*info.eltSize
@@ -387,13 +482,14 @@ func (w *extArrayWalker) element(idx uint64) ([]byte, bool, error) {
 	within := t - info.sblkStart[sblk]
 	dblkIdx := within / info.sblkNelmts[sblk]
 	elmtIdx := within % info.sblkNelmts[sblk]
-	if info.sblkNelmts[sblk] > info.pageNelmts {
-		return nil, false, errors.New("paged extensible array data blocks not yet supported")
-	}
+	w.skipTo = info.idxBlkElmts + info.sblkStart[sblk] + (dblkIdx+1)*info.sblkNelmts[sblk]
 
 	dblkAddr, ok, err := w.dataBlockAddress(sblk, dblkIdx)
 	if err != nil || !ok {
 		return nil, false, err
+	}
+	if info.sblkNelmts[sblk] > info.pageNelmts {
+		return nil, false, errors.New("paged extensible array data blocks not yet supported")
 	}
 
 	dblk, cached := w.dblkCache[dblkAddr]
@@ -444,6 +540,7 @@ func (w *extArrayWalker) superBlockDataBlockAddress(sblk, dblkIdx uint64) (uint6
 	off := sblkAddrsOff + (sblk-info.iblkNsblks)*offU
 	sblkAddr := readUint64(w.iblk[off:], int(w.sb.OffsetSize), w.sb.Endianness)
 	if isUndefinedAddress(sblkAddr, w.sb.OffsetSize) {
+		w.skipTo = info.idxBlkElmts + info.sblkStart[sblk] + info.sblkNdblks[sblk]*info.sblkNelmts[sblk]
 		return 0, false, nil
 	}
 
@@ -538,15 +635,20 @@ func extensibleArrayChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *S
 		sblkCache: make(map[uint64][]byte),
 	}
 
-	nChunks := gridChunkCount(grid)
-	entries := make([]ChunkLocation, 0, nChunks)
+	nChunks, err := gridChunkCount(grid)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]ChunkLocation, 0, min(nChunks, 4096))
 	for idx := uint64(0); idx < nChunks; idx++ {
 		elt, ok, err := walker.element(idx)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			continue // Covering block never allocated: chunk missing.
+			// Covering block never allocated: skip its whole range.
+			idx = max(idx, walker.skipTo-1)
+			continue
 		}
 		entry, ok, err := decodeChunkElement(elt, info.clientID, sb, layout)
 		if err != nil {
@@ -591,30 +693,161 @@ func decodeBTreeV2ChunkRecord(rec []byte, recType uint8, sizeLen, rank int, layo
 	return entry
 }
 
+// btreeV2Geometry holds the per-depth node capacities of a v2 B-tree
+// (H5B2hdr.c: H5B2__hdr_init). Index 0 is the leaf level.
+type btreeV2Geometry struct {
+	recSize    int
+	maxNrec    []uint64 // Max records per node at each depth.
+	cumMaxNrec []uint64 // Max records in a whole subtree rooted at each depth.
+	nrecSize   int      // Bytes used to encode a child's record count.
+}
+
+// limitEncSize is H5VM_limit_enc_size: bytes needed to encode values up to n.
+func limitEncSize(n uint64) int {
+	return int(floorLog2(n))/8 + 1 //nolint:gosec // G115: value bounded by the enclosing length checks
+}
+
+// maxBTreeV2Depth bounds tree depth; each level multiplies capacity by at
+// least 2, so deeper trees cannot be valid.
+const maxBTreeV2Depth = 16
+
+func newBTreeV2Geometry(nodeSize uint32, recSize, depth, offsetSize int) (*btreeV2Geometry, error) {
+	const prefix = 10 // sig + version + type + checksum
+	if recSize <= 0 || int64(nodeSize) <= int64(prefix+recSize) || depth > maxBTreeV2Depth {
+		return nil, fmt.Errorf("invalid v2 b-tree geometry: node size %d, record size %d, depth %d", nodeSize, recSize, depth)
+	}
+	g := &btreeV2Geometry{recSize: recSize}
+	leaf := uint64(nodeSize-prefix) / uint64(recSize)
+	g.maxNrec = []uint64{leaf}
+	g.cumMaxNrec = []uint64{leaf}
+	g.nrecSize = limitEncSize(leaf)
+	for d := 1; d <= depth; d++ {
+		ptr := offsetSize + g.nrecSize
+		if d > 1 {
+			ptr += limitEncSize(g.cumMaxNrec[d-1])
+		}
+		avail := int64(nodeSize) - prefix - int64(ptr)
+		if avail < int64(recSize+ptr) {
+			return nil, errors.New("invalid v2 b-tree geometry: node too small for internal node")
+		}
+		m := uint64(avail) / uint64(recSize+ptr) //nolint:gosec // G115: value bounded by the enclosing length checks
+		g.maxNrec = append(g.maxNrec, m)
+		hi, lo := bits.Mul64(m+1, g.cumMaxNrec[d-1])
+		if hi != 0 || lo+m < lo {
+			return nil, errors.New("invalid v2 b-tree geometry: capacity overflow")
+		}
+		g.cumMaxNrec = append(g.cumMaxNrec, lo+m)
+	}
+	return g, nil
+}
+
+// btreeV2ChunkWalker collects chunk records from a v2 B-tree of any depth.
+type btreeV2ChunkWalker struct {
+	r       io.ReaderAt
+	sb      *Superblock
+	geo     *btreeV2Geometry
+	recType uint8
+	limit   uint64 // Header's total record count; the walk may not exceed it.
+	visited map[uint64]bool
+	entries []ChunkLocation
+	decode  func(rec []byte) ChunkLocation
+}
+
+// walk reads the node at addr (holding nrec records at the given depth) and
+// everything below it.
+func (w *btreeV2ChunkWalker) walk(addr, nrec uint64, depth int) error {
+	if w.visited[addr] {
+		return fmt.Errorf("v2 b-tree cycle: node at 0x%x visited twice", addr)
+	}
+	w.visited[addr] = true
+	if nrec > w.geo.maxNrec[depth] {
+		return fmt.Errorf("v2 b-tree node at 0x%x claims %d records, max %d", addr, nrec, w.geo.maxNrec[depth])
+	}
+	recSize := uint64(w.geo.recSize) //nolint:gosec // G115: value bounded by the enclosing length checks
+	offU := uint64(w.sb.OffsetSize)
+
+	if depth == 0 {
+		// Leaf: sig "BTLF"(4) version(1) type(1) records checksum(4).
+		buf, err := readIndexBlob(w.r, addr, 6+nrec*recSize+4, "BTLF")
+		if err != nil {
+			return err
+		}
+		if buf[5] != w.recType {
+			return fmt.Errorf("v2 b-tree leaf record type mismatch: %d", buf[5])
+		}
+		return w.addRecords(buf[6:], nrec)
+	}
+
+	// Internal: sig "BTIN"(4) version(1) type(1) records, then nrec+1 child
+	// pointers (address, record count, and for depth > 1 the subtree total),
+	// checksum(4).
+	ptrSize := offU + uint64(w.geo.nrecSize) //nolint:gosec // G115: value bounded by the enclosing length checks
+	if depth > 1 {
+		ptrSize += uint64(limitEncSize(w.geo.cumMaxNrec[depth-1])) //nolint:gosec // G115: value bounded by the enclosing length checks
+	}
+	buf, err := readIndexBlob(w.r, addr, 6+nrec*recSize+(nrec+1)*ptrSize+4, "BTIN")
+	if err != nil {
+		return err
+	}
+	if buf[5] != w.recType {
+		return fmt.Errorf("v2 b-tree internal record type mismatch: %d", buf[5])
+	}
+	if err := w.addRecords(buf[6:], nrec); err != nil {
+		return err
+	}
+	ptrs := buf[6+nrec*recSize:]
+	for i := uint64(0); i <= nrec; i++ {
+		p := ptrs[i*ptrSize:]
+		child := readUint64(p, int(offU), w.sb.Endianness) //nolint:gosec // G115: value bounded by the enclosing length checks
+		childN := readUint64(p[offU:], w.geo.nrecSize, w.sb.Endianness)
+		if err := w.walk(child, childN, depth-1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *btreeV2ChunkWalker) addRecords(recs []byte, nrec uint64) error {
+	if uint64(len(w.entries))+nrec > w.limit {
+		return errors.New("v2 b-tree holds more records than its header declares")
+	}
+	rs := uint64(w.geo.recSize) //nolint:gosec // G115: value bounded by the enclosing length checks
+	for i := uint64(0); i < nrec; i++ {
+		w.entries = append(w.entries, w.decode(recs[i*rs:(i+1)*rs]))
+	}
+	return nil
+}
+
 // btreeV2ChunkEntries reads a version 2 B-tree chunk index (record types 10
-// and 11). Only depth-0 trees (all records in the root leaf node) are
-// supported so far.
+// and 11) of any depth.
 func btreeV2ChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *Superblock, grid []uint64) ([]ChunkLocation, error) {
 	offsetSize := int(sb.OffsetSize)
 	rank := len(grid)
 
-	header, err := readBTreeV2HeaderRaw(r, layout.DataAddress, sb)
+	// Header: sig "BTHD"(4) version(1) type(1) node size(4) record size(2)
+	// depth(2) split%(1) merge%(1) root addr(offsetSize) root nrec(2)
+	// total records(lengthSize) checksum(4).
+	buf, err := readIndexBlob(r, layout.DataAddress, 22+uint64(sb.OffsetSize)+uint64(sb.LengthSize), "BTHD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read chunk v2 b-tree header: %w", err)
 	}
-	if header.Type != btreeV2TypeChunksUnfiltered && header.Type != btreeV2TypeChunksFiltered {
-		return nil, fmt.Errorf("unexpected v2 b-tree record type for chunk index: %d", header.Type)
+	recType := buf[5]
+	nodeSize := sb.Endianness.Uint32(buf[6:])
+	recSize := int(sb.Endianness.Uint16(buf[10:]))
+	depth := int(sb.Endianness.Uint16(buf[12:]))
+	rootAddr := readUint64(buf[16:], offsetSize, sb.Endianness)
+	rootNrec := uint64(sb.Endianness.Uint16(buf[16+offsetSize:]))
+	total := readUint64(buf[18+offsetSize:], int(sb.LengthSize), sb.Endianness)
+
+	if recType != btreeV2TypeChunksUnfiltered && recType != btreeV2TypeChunksFiltered {
+		return nil, fmt.Errorf("unexpected v2 b-tree record type for chunk index: %d", recType)
 	}
-	if header.Depth != 0 {
-		return nil, fmt.Errorf("chunk v2 b-tree depth %d not yet supported", header.Depth)
-	}
-	if header.NumRecordsRoot == 0 || isUndefinedAddress(header.RootNodeAddr, sb.OffsetSize) {
+	if rootNrec == 0 || isUndefinedAddress(rootAddr, sb.OffsetSize) {
 		return nil, nil
 	}
 
-	recSize := int(header.RecordSize)
 	sizeLen := 0
-	if header.Type == btreeV2TypeChunksFiltered {
+	if recType == btreeV2TypeChunksFiltered {
 		sizeLen = recSize - offsetSize - 4 - 8*rank
 		if sizeLen < 1 || sizeLen > 8 {
 			return nil, fmt.Errorf("invalid filtered chunk record size: %d", recSize)
@@ -623,21 +856,19 @@ func btreeV2ChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *Superbloc
 		return nil, fmt.Errorf("invalid chunk record size %d for rank %d", recSize, rank)
 	}
 
-	// Leaf node: sig "BTLF"(4) version(1) type(1) records(n x recSize) checksum(4).
-	nRecords := int(header.NumRecordsRoot)
-	leafSize := 6 + uint64(header.NumRecordsRoot)*uint64(header.RecordSize) + 4
-	buf, err := readIndexBlob(r, header.RootNodeAddr, leafSize, "BTLF")
+	geo, err := newBTreeV2Geometry(nodeSize, recSize, depth, offsetSize)
 	if err != nil {
 		return nil, err
 	}
-	if buf[5] != header.Type {
-		return nil, fmt.Errorf("v2 b-tree leaf record type mismatch: %d", buf[5])
+	w := &btreeV2ChunkWalker{
+		r: r, sb: sb, geo: geo, recType: recType, limit: total,
+		visited: map[uint64]bool{},
+		decode: func(rec []byte) ChunkLocation {
+			return decodeBTreeV2ChunkRecord(rec, recType, sizeLen, rank, layout, sb)
+		},
 	}
-
-	entries := make([]ChunkLocation, 0, nRecords)
-	for i := 0; i < nRecords; i++ {
-		rec := buf[6+i*recSize : 6+(i+1)*recSize]
-		entries = append(entries, decodeBTreeV2ChunkRecord(rec, header.Type, sizeLen, rank, layout, sb))
+	if err := w.walk(rootAddr, rootNrec, depth); err != nil {
+		return nil, err
 	}
-	return entries, nil
+	return w.entries, nil
 }

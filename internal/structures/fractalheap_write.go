@@ -61,7 +61,36 @@ type WritableFractalHeap struct {
 	// Addresses loaded from file (for RMW scenarios)
 	loadedHeaderAddress      uint64
 	loadedDirectBlockAddress uint64
+
+	// fileOffsetSize is the superblock offset size; it sets the direct block
+	// header width, which heap IDs must account for (default 8).
+	fileOffsetSize uint8
 }
+
+// dblockOverhead is the size of a direct block header (signature, version,
+// heap header address, block offset and, when enabled, the checksum). Heap
+// offsets in object IDs count from the start of the block, header included,
+// so an object at index i of DirectBlock.Objects has heap offset overhead+i.
+// Reference: H5HFpkg.h - H5HF_MAN_ABS_DIRECT_OVERHEAD.
+func (fh *WritableFractalHeap) dblockOverhead() uint64 {
+	n := 5 + uint64(fh.fileOffsetSize) + uint64(fh.Header.HeapOffsetSize)
+	if fh.Header.Flags&heapFlagChecksumDirectBlocks != 0 {
+		n += 4
+	}
+	return n
+}
+
+// objectIndex converts a heap offset from an object ID into an index into the
+// block's Objects (block-relative).
+func (fh *WritableFractalHeap) objectIndex(heapOffset uint64) (uint64, error) {
+	ov := fh.dblockOverhead()
+	if heapOffset < ov {
+		return 0, fmt.Errorf("%w: offset %d lies inside the direct block header", ErrInvalidObjectID, heapOffset)
+	}
+	return heapOffset - ov, nil
+}
+
+const heapFlagChecksumDirectBlocks = 0x02
 
 // WritableHeapHeader represents a fractal heap header for writing.
 // Simplified from FractalHeapHeader for write support.
@@ -141,7 +170,7 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 		Version:         0,
 		HeapIDLength:    DefaultHeapIDLength,
 		IOFiltersLength: 0,
-		Flags:           0, // No checksums, no huge objects
+		Flags:           heapFlagChecksumDirectBlocks, // checksummed direct blocks, no huge objects
 
 		MaxManagedObjectSize: DefaultMaxManagedObjectSize,
 		NextHugeObjectID:     0,
@@ -178,11 +207,12 @@ func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 		BlockOffset:       0, // First block at offset 0
 		Size:              blockSize,
 		Objects:           make([]byte, 0, blockSize),
-		FreeOffset:        0,     // Next insert at 0
-		ChecksumEnabled:   false, // No checksum
+		FreeOffset:        0, // Next insert at 0
+		ChecksumEnabled:   true,
 	}
 
 	return &WritableFractalHeap{
+		fileOffsetSize:     8,
 		Header:             header,
 		DirectBlock:        directBlock,
 		RootIndirectBlock:  nil,                                   // Start with direct block root
@@ -264,7 +294,7 @@ func (fh *WritableFractalHeap) needsTransition(objectSize uint64) bool {
 	}
 
 	// Check if object fits in current direct block
-	if fh.DirectBlock.FreeOffset+objectSize <= fh.DirectBlock.Size {
+	if fh.DirectBlock.FreeOffset+objectSize <= fh.DirectBlock.Size-fh.dblockOverhead() {
 		return false // Still fits
 	}
 
@@ -324,9 +354,10 @@ func (fh *WritableFractalHeap) insertViaDirect(data []byte) ([]byte, error) {
 	dataSize := uint64(len(data))
 
 	// Check if enough space in direct block
-	if fh.DirectBlock.FreeOffset+dataSize > fh.DirectBlock.Size {
+	capacity := fh.DirectBlock.Size - fh.dblockOverhead()
+	if fh.DirectBlock.FreeOffset+dataSize > capacity {
 		return nil, fmt.Errorf("%w: need %d bytes, have %d free",
-			ErrHeapFull, dataSize, fh.DirectBlock.Size-fh.DirectBlock.FreeOffset)
+			ErrHeapFull, dataSize, capacity-fh.DirectBlock.FreeOffset)
 	}
 
 	// Current offset becomes the object's location
@@ -380,7 +411,7 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 
 	// Try each existing child block
 	for offset, block := range fh.DirectBlocks {
-		if block.FreeOffset+dataSize <= block.Size {
+		if block.FreeOffset+dataSize <= block.Size-fh.dblockOverhead() {
 			targetBlock = block
 			targetOffset = offset
 			break
@@ -401,7 +432,7 @@ func (fh *WritableFractalHeap) insertViaIndirect(data []byte) ([]byte, error) {
 			Size:              fh.MaxDirectBlockSize, // Use max block size
 			Objects:           make([]byte, 0, fh.MaxDirectBlockSize),
 			FreeOffset:        0,
-			ChecksumEnabled:   false,
+			ChecksumEnabled:   true,
 		}
 
 		// Add to DirectBlocks map
@@ -473,9 +504,9 @@ func (fh *WritableFractalHeap) encodeHeapID(offset, length uint64) []byte {
 	// Flags byte: version (bits 6-7) = 0, type (bits 4-5) = 0 (managed)
 	heapID[0] = 0x00 // Version 0, Type managed
 
-	// Encode offset (little-endian)
+	// Encode offset (little-endian), counted from the start of the block
 	idx := 1
-	writeUintVar(heapID[idx:], offset, int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	writeUintVar(heapID[idx:], offset+fh.dblockOverhead(), int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 
 	// Encode length (little-endian)
@@ -617,16 +648,16 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	writeUintVar(buf[offset:], fh.Header.NextHugeObjectID, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	// Huge Object B-tree Address
-	writeUintVar(buf[offset:], fh.Header.HugeObjectBTreeAddr, int(sb.OffsetSize), sb.Endianness)
+	// Huge Object B-tree Address (undefined when the heap has no huge objects)
+	writeUintVar(buf[offset:], undefinedIfZero(fh.Header.HugeObjectBTreeAddr), int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Free Space Amount
 	writeUintVar(buf[offset:], fh.Header.FreeSpace, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	// Free Section Address
-	writeUintVar(buf[offset:], fh.Header.FreeSectionAddress, int(sb.OffsetSize), sb.Endianness)
+	// Free Section Address (undefined when there is no free-space manager)
+	writeUintVar(buf[offset:], undefinedIfZero(fh.Header.FreeSectionAddress), int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Managed Space Statistics (4 fields)
@@ -695,47 +726,42 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 
 // writeDirectBlockAt serializes and writes direct block at the given address.
 //
-// NOTE: HDF5 direct blocks are written at FULL block size, not just used portion.
-// This allows readers to know the block size without additional metadata.
-//
-// Reference: H5HFcache.c - H5HF__cache_dblock_pre_serialize().
+// Layout (H5HFcache.c - H5HF__cache_dblock_serialize): signature, version,
+// heap header address, block offset, then the checksum (Jenkins lookup3 of the
+// whole block computed with the checksum field zeroed), then object data.
+// Blocks are written at their full size.
 func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb *core.Superblock) error {
-	// Checksum is always at the end of the FULL block (not just used portion)
-	checksumSize := 4
-
-	// Total size is FULL block size (not just used portion!)
-	// This matches HDF5 C library behavior - blocks are fixed size
 	//nolint:gosec // G115: block size from header, max ~2GB
 	totalSize := int(fh.DirectBlock.Size)
 
 	buf := make([]byte, totalSize)
 	offset := 0
 
-	// Signature
 	copy(buf[offset:], DirectBlockSignature)
 	offset += 4
 
-	// Version
 	buf[offset] = fh.DirectBlock.Version
 	offset++
 
-	// Heap Header Address
 	writeUintVar(buf[offset:], fh.DirectBlock.HeapHeaderAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
-	// Block Offset (variable-sized based on heap offset size)
 	writeUintVar(buf[offset:], fh.DirectBlock.BlockOffset, int(fh.Header.HeapOffsetSize), sb.Endianness)
 	offset += int(fh.Header.HeapOffsetSize)
+
+	checksumAt := -1
+	if fh.Header.Flags&heapFlagChecksumDirectBlocks != 0 {
+		checksumAt = offset
+		offset += 4
+	}
 
 	// Object data (used portion) - rest is padding
 	copy(buf[offset:], fh.DirectBlock.Objects)
 
-	// Checksum at END of block (last 4 bytes)
-	checksumOffset := totalSize - checksumSize
-	checksum := core.JenkinsChecksum(buf[:checksumOffset])
-	binary.LittleEndian.PutUint32(buf[checksumOffset:], checksum)
+	if checksumAt >= 0 {
+		binary.LittleEndian.PutUint32(buf[checksumAt:], core.JenkinsChecksum(buf))
+	}
 
-	// Write to file at pre-allocated address
 	return writer.WriteAtAddress(buf, addr)
 }
 
@@ -744,7 +770,7 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 //
 // Reference: H5HFdblock.c - H5HF__cache_dblock_deserialize().
 func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, address, blockSize uint64,
-	heapOffsetSize, fileOffsetSize uint8, endianness binary.ByteOrder, headerAddr uint64) (*DirectBlock, error) {
+	heapOffsetSize, fileOffsetSize uint8, endianness binary.ByteOrder, headerAddr uint64, checksummed bool) (*DirectBlock, error) {
 	if address == 0 || address == ^uint64(0) {
 		return nil, fmt.Errorf("invalid direct block address: 0x%X", address)
 	}
@@ -789,14 +815,13 @@ func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, addre
 	dblock.BlockOffset = readUint(buf[offset:offset+int(heapOffsetSize)], int(heapOffsetSize), endianness)
 	offset += int(heapOffsetSize)
 
-	// Data (remaining bytes, excluding checksum if present)
-	// For simplicity, we assume checksum is always present for now
-	dataEnd := totalSize - 4 // Exclude checksum
-	dblock.Data = make([]byte, dataEnd-offset)
-	copy(dblock.Data, buf[offset:dataEnd])
-
-	// Checksum at end (not validated)
-	dblock.Checksum = endianness.Uint32(buf[totalSize-4 : totalSize])
+	// Checksum sits in the block header (not validated); data follows it.
+	if checksummed {
+		dblock.Checksum = endianness.Uint32(buf[offset : offset+4])
+		offset += 4
+	}
+	dblock.Data = make([]byte, totalSize-offset)
+	copy(dblock.Data, buf[offset:])
 
 	return dblock, nil
 }
@@ -844,12 +869,14 @@ func (fh *WritableFractalHeap) LoadFromFile(reader io.ReaderAt, address uint64, 
 
 	// Read the direct block manually (readDirectBlock is private)
 	dblock, err := fh.readDirectBlockFromFile(reader, readHeap.Header.RootBlockAddr, readHeap.Header.StartingBlockSize,
-		readHeap.Header.HeapOffsetSize, sb.OffsetSize, sb.Endianness, readHeap.headerAddr)
+		readHeap.Header.HeapOffsetSize, sb.OffsetSize, sb.Endianness, readHeap.headerAddr,
+		readHeap.Header.ChecksumDirectBlocks)
 	if err != nil {
 		return fmt.Errorf("failed to read direct block: %w", err)
 	}
 
 	// Store loaded addresses for WriteAt() support (RMW)
+	fh.fileOffsetSize = sb.OffsetSize
 	fh.loadedHeaderAddress = address
 	fh.loadedDirectBlockAddress = readHeap.Header.RootBlockAddr
 
@@ -942,8 +969,12 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 	}
 
 	idx := 1
-	globalOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
+	globalOffset, err := fh.objectIndex(heapOffset)
+	if err != nil {
+		return nil, err
+	}
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
@@ -1048,8 +1079,12 @@ func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
 	}
 
 	idx := 1
-	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
+	offset, err := fh.objectIndex(heapOffset)
+	if err != nil {
+		return err
+	}
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
@@ -1116,8 +1151,12 @@ func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 	}
 
 	idx := 1
-	offset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
+	offset, err := fh.objectIndex(heapOffset)
+	if err != nil {
+		return err
+	}
 
 	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
@@ -1167,4 +1206,13 @@ func writeUintVar(buf []byte, value uint64, size int, endianness binary.ByteOrde
 			}
 		}
 	}
+}
+
+// undefinedIfZero maps the unset address 0 to the HDF5 "undefined" address (all ones);
+// the C library treats 0 as a real address and would try to open a B-tree there.
+func undefinedIfZero(addr uint64) uint64 {
+	if addr == 0 {
+		return ^uint64(0)
+	}
+	return addr
 }

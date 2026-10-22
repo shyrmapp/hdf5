@@ -14,8 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestReadValue_Int8(t *testing.T) {
-	// Int8 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=1.
+	// Signed 8-bit values decode to []int8.
 	attr := &Attribute{
 		Name: "int8_attr",
 		Datatype: &DatatypeMessage{
@@ -30,14 +29,13 @@ func TestReadValue_Int8(t *testing.T) {
 		Data: []byte{0x01, 0x02, 0x03},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	val, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int8{1, 2, 3}, val)
 }
 
 func TestReadValue_Int16(t *testing.T) {
-	// Int16 is not directly supported by ReadValue (only size 4 and 8 for Fixed).
-	// Expect an "unsupported" error for size=2.
+	// Signed 16-bit values decode to []int16.
 	attr := &Attribute{
 		Name: "int16_attr",
 		Datatype: &DatatypeMessage{
@@ -52,14 +50,13 @@ func TestReadValue_Int16(t *testing.T) {
 		Data: []byte{0x01, 0x00, 0x02, 0x00},
 	}
 
-	_, err := attr.ReadValue()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported datatype class")
+	val, err := attr.ReadValue()
+	require.NoError(t, err)
+	require.Equal(t, []int16{1, 2}, val)
 }
 
 func TestReadValue_Uint32(t *testing.T) {
-	// ReadValue returns int32 for all Fixed/size=4 regardless of sign bit.
-	// Unsigned 32-bit values are read as int32 (HDF5 convention in this library).
+	// Unsigned 32-bit values decode to uint32.
 	attr := &Attribute{
 		Name: "uint32_attr",
 		Datatype: &DatatypeMessage{
@@ -82,7 +79,7 @@ func TestReadValue_Uint32(t *testing.T) {
 
 	val, err := attr.ReadValue()
 	require.NoError(t, err)
-	require.Equal(t, []int32{100, 200, 300}, val)
+	require.Equal(t, []uint32{100, 200, 300}, val)
 }
 
 func TestReadValue_Float32(t *testing.T) {
@@ -229,8 +226,9 @@ func TestReadValue_ScalarInt(t *testing.T) {
 	attr := &Attribute{
 		Name: "scalar_int",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceScalar,
@@ -256,8 +254,9 @@ func TestReadValue_ScalarInt64(t *testing.T) {
 	attr := &Attribute{
 		Name: "scalar_int64",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceScalar,
@@ -308,8 +307,9 @@ func TestReadValue_SingleElementArray(t *testing.T) {
 	attr := &Attribute{
 		Name: "single_element",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -332,8 +332,9 @@ func TestReadValue_Int32DataTooShort(t *testing.T) {
 	attr := &Attribute{
 		Name: "short_data",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -351,8 +352,9 @@ func TestReadValue_Int64DataTooShort(t *testing.T) {
 	attr := &Attribute{
 		Name: "short_data_int64",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -421,7 +423,7 @@ func TestReadValue_FixedStringDataTooShort(t *testing.T) {
 
 	_, err := attr.ReadValue()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "data too short for string element")
+	require.Contains(t, err.Error(), "data too short")
 }
 
 func TestReadValue_VarLenStringDataTooShort(t *testing.T) {
@@ -453,8 +455,9 @@ func TestReadValue_NullDataspace(t *testing.T) {
 	attr := &Attribute{
 		Name: "null_ds",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type: DataspaceNull,
@@ -522,8 +525,9 @@ func TestReadValue_Int32LargeArray(t *testing.T) {
 	attr := &Attribute{
 		Name: "large_int32_array",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  4,
+			Class:         DatatypeFixed,
+			Size:          4,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -550,8 +554,9 @@ func TestReadValue_Int64Array(t *testing.T) {
 	attr := &Attribute{
 		Name: "int64_array",
 		Datatype: &DatatypeMessage{
-			Class: DatatypeFixed,
-			Size:  8,
+			Class:         DatatypeFixed,
+			Size:          8,
+			ClassBitField: 0x08, // signed
 		},
 		Dataspace: &DataspaceMessage{
 			Type:       DataspaceSimple,
@@ -589,541 +594,6 @@ func TestReadValue_ScalarFloat64(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Binary parsing tests for readBTreeV2HeaderRaw
-// ---------------------------------------------------------------------------
-
-func TestReadBTreeV2HeaderRaw_Valid(t *testing.T) {
-	// Construct a valid BTHD header in memory.
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 38)
-	offset := 0
-
-	// Signature "BTHD"
-	copy(buf[offset:], "BTHD")
-	offset += 4
-
-	// Version
-	buf[offset] = 0
-	offset++
-
-	// Type (8 = attribute name index)
-	buf[offset] = 8
-	offset++
-
-	// Node Size (4 bytes)
-	binary.LittleEndian.PutUint32(buf[offset:], 4096)
-	offset += 4
-
-	// Record Size (2 bytes)
-	binary.LittleEndian.PutUint16(buf[offset:], 11)
-	offset += 2
-
-	// Depth (2 bytes)
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
-
-	// Split % and Merge %
-	buf[offset] = 75
-	offset++
-	buf[offset] = 40
-	offset++
-
-	// Root Node Address (8 bytes)
-	binary.LittleEndian.PutUint64(buf[offset:], 0xABCD1234)
-	offset += 8
-
-	// Number of Records in Root (2 bytes)
-	binary.LittleEndian.PutUint16(buf[offset:], 5)
-	offset += 2
-
-	// Total Records (8 bytes)
-	binary.LittleEndian.PutUint64(buf[offset:], 5)
-
-	reader := bytes.NewReader(buf)
-
-	header, err := readBTreeV2HeaderRaw(reader, 0, sb)
-	require.NoError(t, err)
-	require.NotNil(t, header)
-	require.Equal(t, uint8(0), header.Version)
-	require.Equal(t, uint8(8), header.Type)
-	require.Equal(t, uint32(4096), header.NodeSize)
-	require.Equal(t, uint16(11), header.RecordSize)
-	require.Equal(t, uint16(0), header.Depth)
-	require.Equal(t, uint64(0xABCD1234), header.RootNodeAddr)
-	require.Equal(t, uint16(5), header.NumRecordsRoot)
-	require.Equal(t, uint64(5), header.TotalRecords)
-}
-
-func TestReadBTreeV2HeaderRaw_InvalidSignature(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 38)
-	copy(buf[0:4], "XXXX") // Wrong signature
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2HeaderRaw(reader, 0, sb)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid B-tree v2 signature")
-}
-
-func TestReadBTreeV2HeaderRaw_TooShort(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 10) // Too short
-	copy(buf[0:4], "BTHD")
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2HeaderRaw(reader, 0, sb)
-	require.Error(t, err)
-}
-
-func TestReadBTreeV2HeaderRaw_4ByteOffsets(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 4,
-		LengthSize: 4,
-		Endianness: binary.LittleEndian,
-	}
-
-	// Build header with 4-byte offsets.
-	// Size: 4(sig) + 1(ver) + 1(type) + 4(node size) + 2(record size) + 2(depth)
-	//     + 1(split) + 1(merge) + 4(root addr) + 2(num records) + 8(total records) = 30 bytes
-	buf := make([]byte, 38) // Extra space is fine
-	offset := 0
-
-	copy(buf[offset:], "BTHD")
-	offset += 4
-	buf[offset] = 0 // version
-	offset++
-	buf[offset] = 8 // type
-	offset++
-	binary.LittleEndian.PutUint32(buf[offset:], 2048)
-	offset += 4
-	binary.LittleEndian.PutUint16(buf[offset:], 11)
-	offset += 2
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
-	buf[offset] = 75
-	offset++
-	buf[offset] = 40
-	offset++
-	binary.LittleEndian.PutUint32(buf[offset:], 0x5678)
-	offset += 4
-	binary.LittleEndian.PutUint16(buf[offset:], 3)
-	offset += 2
-	binary.LittleEndian.PutUint64(buf[offset:], 3)
-
-	reader := bytes.NewReader(buf)
-
-	header, err := readBTreeV2HeaderRaw(reader, 0, sb)
-	require.NoError(t, err)
-	require.Equal(t, uint64(0x5678), header.RootNodeAddr)
-	require.Equal(t, uint16(3), header.NumRecordsRoot)
-}
-
-// ---------------------------------------------------------------------------
-// Binary parsing tests for readBTreeV2LeafRecords
-// ---------------------------------------------------------------------------
-
-func TestReadBTreeV2LeafRecords_Valid(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	numRecords := uint16(3)
-	// Each record: 4 bytes hash + 7 bytes heap ID = 11 bytes.
-	// Header: 4 (sig) + 1 (ver) + 1 (type) = 6 bytes.
-	// Checksum: 4 bytes.
-	bufSize := 6 + int(numRecords)*11 + 4
-	buf := make([]byte, bufSize)
-
-	offset := 0
-	copy(buf[offset:], "BTLF")
-	offset += 4
-	buf[offset] = 0 // version
-	offset++
-	buf[offset] = 8 // type
-	offset++
-
-	// Record 0
-	binary.LittleEndian.PutUint32(buf[offset:], 0x11111111) // hash
-	offset += 4
-	heapID0 := [7]byte{0x00, 0x10, 0x00, 0x20, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID0[:])
-	offset += 7
-
-	// Record 1
-	binary.LittleEndian.PutUint32(buf[offset:], 0x22222222)
-	offset += 4
-	heapID1 := [7]byte{0x00, 0x30, 0x00, 0x40, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID1[:])
-	offset += 7
-
-	// Record 2
-	binary.LittleEndian.PutUint32(buf[offset:], 0x33333333)
-	offset += 4
-	heapID2 := [7]byte{0x00, 0x50, 0x00, 0x60, 0x00, 0x00, 0x00}
-	copy(buf[offset:offset+7], heapID2[:])
-
-	reader := bytes.NewReader(buf)
-
-	heapIDs, err := readBTreeV2LeafRecords(reader, 0, numRecords, sb)
-	require.NoError(t, err)
-	require.Len(t, heapIDs, 3)
-	require.Equal(t, heapID0, heapIDs[0])
-	require.Equal(t, heapID1, heapIDs[1])
-	require.Equal(t, heapID2, heapIDs[2])
-}
-
-func TestReadBTreeV2LeafRecords_InvalidSignature(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 40)
-	copy(buf[0:4], "XXXX")
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2LeafRecords(reader, 0, 1, sb)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid B-tree v2 leaf signature")
-}
-
-func TestReadBTreeV2LeafRecords_ZeroRecords(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	bufSize := 6 + 4 // header + checksum, no records
-	buf := make([]byte, bufSize)
-	copy(buf[0:4], "BTLF")
-	buf[4] = 0 // version
-	buf[5] = 8 // type
-
-	reader := bytes.NewReader(buf)
-
-	heapIDs, err := readBTreeV2LeafRecords(reader, 0, 0, sb)
-	require.NoError(t, err)
-	require.Len(t, heapIDs, 0)
-}
-
-func TestReadBTreeV2LeafRecords_TooShort(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 5) // Too short
-	reader := bytes.NewReader(buf)
-
-	_, err := readBTreeV2LeafRecords(reader, 0, 1, sb)
-	require.Error(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// Binary parsing tests for readFractalHeapHeaderRaw
-// ---------------------------------------------------------------------------
-
-func TestReadFractalHeapHeaderRaw_Valid(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 144)
-
-	// Signature "FRHP"
-	copy(buf[0:4], "FRHP")
-
-	// Version
-	buf[4] = 0
-
-	// Heap ID Length (2 bytes)
-	binary.LittleEndian.PutUint16(buf[5:7], 7)
-
-	// I/O Filters Encoded Length (2 bytes)
-	binary.LittleEndian.PutUint16(buf[7:9], 0)
-
-	// Flags (1 byte)
-	buf[9] = 0x00 // no checksum for direct blocks
-
-	// Max Managed Object Size (4 bytes) at offset 10
-	binary.LittleEndian.PutUint32(buf[10:14], 512)
-
-	// At offset 110: Table Width (2 bytes)
-	binary.LittleEndian.PutUint16(buf[110:112], 4)
-
-	// Starting Block Size (LengthSize=8 bytes) at offset 112
-	binary.LittleEndian.PutUint64(buf[112:120], 4096)
-
-	// Max Direct Block Size (LengthSize=8 bytes) at offset 120
-	binary.LittleEndian.PutUint64(buf[120:128], 65536)
-
-	// Max Heap Size (2 bytes) at offset 128
-	binary.LittleEndian.PutUint16(buf[128:130], 32)
-
-	// Root Block Address at offset 132 (8 bytes)
-	binary.LittleEndian.PutUint64(buf[132:140], 0xDEADBEEF)
-
-	reader := bytes.NewReader(buf)
-
-	header, err := readFractalHeapHeaderRaw(reader, 0, sb)
-	require.NoError(t, err)
-	require.NotNil(t, header)
-	require.Equal(t, uint8(0), header.Version)
-	require.Equal(t, uint16(7), header.HeapIDLen)
-	require.Equal(t, uint32(512), header.MaxManagedObjSize)
-	require.Equal(t, uint64(65536), header.MaxDirectBlockSize)
-	require.Equal(t, uint16(32), header.MaxHeapSize)
-	require.Equal(t, uint64(0xDEADBEEF), header.RootBlockAddress)
-	require.False(t, header.ChecksumDirBlocks)
-
-	// HeapOffsetSize = ceil(32/8) = 4
-	require.Equal(t, uint8(4), header.HeapOffsetSize)
-}
-
-func TestReadFractalHeapHeaderRaw_InvalidSignature(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 144)
-	copy(buf[0:4], "XXXX")
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readFractalHeapHeaderRaw(reader, 0, sb)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid fractal heap signature")
-}
-
-func TestReadFractalHeapHeaderRaw_TooShort(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 10) // Too short
-	copy(buf[0:4], "FRHP")
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readFractalHeapHeaderRaw(reader, 0, sb)
-	require.Error(t, err)
-}
-
-func TestReadFractalHeapHeaderRaw_WithChecksumFlag(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	buf := make([]byte, 144)
-	copy(buf[0:4], "FRHP")
-	buf[4] = 0
-	binary.LittleEndian.PutUint16(buf[5:7], 7)
-	binary.LittleEndian.PutUint16(buf[7:9], 0)
-	buf[9] = 0x02 // Checksum flag set
-	binary.LittleEndian.PutUint32(buf[10:14], 256)
-	binary.LittleEndian.PutUint16(buf[110:112], 4)
-	binary.LittleEndian.PutUint64(buf[112:120], 1024)
-	binary.LittleEndian.PutUint64(buf[120:128], 32768)
-	binary.LittleEndian.PutUint16(buf[128:130], 24)
-	binary.LittleEndian.PutUint64(buf[132:140], 0x1234)
-
-	reader := bytes.NewReader(buf)
-
-	header, err := readFractalHeapHeaderRaw(reader, 0, sb)
-	require.NoError(t, err)
-	require.True(t, header.ChecksumDirBlocks)
-}
-
-// ---------------------------------------------------------------------------
-// Binary parsing tests for readHeapObject
-// ---------------------------------------------------------------------------
-
-func TestReadHeapObject_Valid(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	header := &fractalHeapHeaderRaw{
-		HeapOffsetSize:    2,
-		HeapLengthSize:    2,
-		ChecksumDirBlocks: false,
-	}
-
-	// Construct a minimal FHDB direct block.
-	// Header: "FHDB" (4) + version (1) + heap header addr (8) + block offset (2) = 15 bytes
-	// Then the object data at offset 0 within the block.
-	headerSize := 4 + 1 + 8 + 2
-	objectData := []byte("hello, heap object data!")
-	buf := make([]byte, headerSize+len(objectData)+16)
-
-	offset := 0
-	copy(buf[offset:], "FHDB")
-	offset += 4
-	buf[offset] = 0 // version
-	offset++
-	// Heap header address (8 bytes)
-	binary.LittleEndian.PutUint64(buf[offset:], 0x1000)
-	offset += 8
-	// Block offset in heap space (2 bytes = HeapOffsetSize)
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // block starts at heap offset 0
-	offset += 2
-	// Object data starts here
-	copy(buf[offset:], objectData)
-
-	reader := bytes.NewReader(buf)
-
-	// Read object at heap offset 0, length = len(objectData).
-	result, err := readHeapObject(reader, 0, 0, uint64(len(objectData)), sb, header)
-	require.NoError(t, err)
-	require.Equal(t, objectData, result)
-}
-
-func TestReadHeapObject_WithOffset(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	header := &fractalHeapHeaderRaw{
-		HeapOffsetSize:    2,
-		HeapLengthSize:    2,
-		ChecksumDirBlocks: false,
-	}
-
-	// Direct block with block offset = 0, object at relative offset 5.
-	headerSize := 4 + 1 + 8 + 2
-	padding := make([]byte, 5)   // 5 bytes before the object
-	objectData := []byte("data") // 4 bytes of data
-	buf := make([]byte, headerSize+len(padding)+len(objectData)+16)
-
-	offset := 0
-	copy(buf[offset:], "FHDB")
-	offset += 4
-	buf[offset] = 0
-	offset++
-	binary.LittleEndian.PutUint64(buf[offset:], 0x1000)
-	offset += 8
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // block offset = 0
-	offset += 2
-	copy(buf[offset:], padding)
-	offset += len(padding)
-	copy(buf[offset:], objectData)
-
-	reader := bytes.NewReader(buf)
-
-	// Object is at heap offset 5, length 4.
-	result, err := readHeapObject(reader, 0, 5, 4, sb, header)
-	require.NoError(t, err)
-	require.Equal(t, objectData, result)
-}
-
-func TestReadHeapObject_InvalidSignature(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	header := &fractalHeapHeaderRaw{
-		HeapOffsetSize: 2,
-		HeapLengthSize: 2,
-	}
-
-	buf := make([]byte, 64)
-	copy(buf[0:4], "XXXX") // Wrong signature
-
-	reader := bytes.NewReader(buf)
-
-	_, err := readHeapObject(reader, 0, 0, 10, sb, header)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid direct block signature")
-}
-
-func TestReadHeapObject_OffsetBeforeBlock(t *testing.T) {
-	sb := &Superblock{
-		OffsetSize: 8,
-		LengthSize: 8,
-		Endianness: binary.LittleEndian,
-	}
-
-	header := &fractalHeapHeaderRaw{
-		HeapOffsetSize: 2,
-		HeapLengthSize: 2,
-	}
-
-	headerSize := 4 + 1 + 8 + 2
-	buf := make([]byte, headerSize+64)
-	copy(buf[0:4], "FHDB")
-	buf[4] = 0
-	binary.LittleEndian.PutUint64(buf[5:13], 0x1000)
-	binary.LittleEndian.PutUint16(buf[13:15], 100) // Block starts at heap offset 100
-
-	reader := bytes.NewReader(buf)
-
-	// Object offset 50 is before block offset 100 -- should fail.
-	_, err := readHeapObject(reader, 0, 50, 10, sb, header)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "object offset")
-}
-
-// ---------------------------------------------------------------------------
-// Tests for computeOffsetSize
-// ---------------------------------------------------------------------------
-
-func TestComputeOffsetSize_ExtendedCases(t *testing.T) {
-	tests := []struct {
-		value uint64
-		want  uint8
-	}{
-		{0, 1},
-		{1, 1},
-		{255, 1},
-		{256, 2},
-		{65535, 2},
-		{65536, 3},
-		{1 << 24, 4},
-		{1 << 32, 5},
-		{1<<64 - 1, 8},
-	}
-
-	for _, tt := range tests {
-		got := computeOffsetSize(tt.value)
-		require.Equal(t, tt.want, got, "computeOffsetSize(%d)", tt.value)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Tests for readDenseAttributes end-to-end with mock data
 // ---------------------------------------------------------------------------
 
@@ -1157,6 +627,7 @@ func TestReadDenseAttributes_EmptyBTreeLeaf(t *testing.T) {
 	binary.LittleEndian.PutUint64(buf[bthdOffset+16:], 0x0200) // root node at BTLF
 	binary.LittleEndian.PutUint16(buf[bthdOffset+24:], 0)      // 0 records in root
 	binary.LittleEndian.PutUint64(buf[bthdOffset+26:], 0)      // 0 total records
+	binary.LittleEndian.PutUint32(buf[bthdOffset+34:], JenkinsChecksum(buf[bthdOffset:bthdOffset+34]))
 
 	// --- BTLF at 0x0200 ---
 	btlfOffset := 0x0200

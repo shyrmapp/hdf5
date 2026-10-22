@@ -23,7 +23,7 @@ func TestDenseLinks_RootGroup(t *testing.T) {
 	defer func() { _ = f.Close() }()
 
 	children := f.Root().Children()
-	require.Len(t, children, 16, "root group should expose all 16 dense links")
+	require.Len(t, children, 17, "root group should expose all 17 dense links (16 variables + dimension x)")
 
 	names := make([]string, len(children))
 	for i, c := range children {
@@ -33,7 +33,7 @@ func TestDenseLinks_RootGroup(t *testing.T) {
 
 	want := []string{
 		"v00", "v01", "v02", "v03", "v04", "v05", "v06", "v07",
-		"v08", "v09", "v10", "v11", "v12", "v13", "v14", "v15",
+		"v08", "v09", "v10", "v11", "v12", "v13", "v14", "v15", "x",
 	}
 	require.Equal(t, want, names)
 }

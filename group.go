@@ -61,6 +61,9 @@ func (d *Dataset) Attributes() ([]*core.Attribute, error) {
 	if err != nil {
 		return nil, err
 	}
+	if header.AttributesErr != nil {
+		return nil, fmt.Errorf("failed to read attributes: %w", header.AttributesErr)
+	}
 	return header.Attributes, nil
 }
 
@@ -216,6 +219,10 @@ func (g *Group) Attributes() ([]*core.Attribute, error) {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
 
+	if header.AttributesErr != nil {
+		return nil, fmt.Errorf("failed to read attributes: %w", header.AttributesErr)
+	}
+
 	// Ensure we return an empty slice instead of nil if no attributes exist.
 	if header.Attributes == nil {
 		return []*core.Attribute{}, nil
@@ -292,9 +299,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 					// Load the object that this link points to.
 					child, err := loadObject(file, linkMsg.ObjectAddress, linkMsg.Name)
 					if err != nil {
-						// Log warning but continue with other links.
-						// Some links might point to objects we don't support yet.
-						continue
+						return nil, fmt.Errorf("load child %q failed: %w", linkMsg.Name, err)
 					}
 					group.children = append(group.children, child)
 				case linkMsg.IsSoftLink():
@@ -338,10 +343,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 				for _, raw := range heapObjects {
 					linkMsg, err := structures.ParseLinkMessage(raw, sb)
 					if err != nil {
-						// Skip individual malformed records rather than
-						// failing the whole group — matches the compact-
-						// link branch's tolerance below.
-						continue
+						return nil, fmt.Errorf("dense link message parse failed: %w", err)
 					}
 					if linkMsg.IsSoftLink() {
 						group.children = append(group.children,
@@ -358,7 +360,7 @@ func loadModernGroup(file *File, address uint64) (*Group, error) {
 					}
 					child, err := loadObject(file, linkMsg.ObjectAddress, linkMsg.Name)
 					if err != nil {
-						continue
+						return nil, fmt.Errorf("load child %q failed: %w", linkMsg.Name, err)
 					}
 					group.children = append(group.children, child)
 				}
@@ -495,14 +497,15 @@ func (g *Group) loadChildren() error {
 		return errors.New("symbol table is nil")
 	}
 
-	// Check for cycles: if we've already visited this B-tree address, skip loading children.
-	// This prevents infinite loops when v0 files have groups sharing symbol table structures.
+	// Cycle protection: only cut a B-tree that is on the current load path.
 	btreeAddr := g.symbolTable.BTreeAddress
-	if g.file.visitedBTrees[btreeAddr] {
-		// Already visited this B-tree, no children to add (prevents cycle).
+	if g.file.loadingBTrees[btreeAddr] {
+		// This B-tree is already being loaded further up the call stack:
+		// a true ancestor cycle. Aliased (non-ancestor) groups load fully.
 		return nil
 	}
-	g.file.visitedBTrees[btreeAddr] = true
+	g.file.loadingBTrees[btreeAddr] = true
+	defer delete(g.file.loadingBTrees, btreeAddr)
 
 	heap, err := structures.LoadLocalHeap(g.file.osFile, g.symbolTable.HeapAddress, g.file.sb)
 	if err != nil {

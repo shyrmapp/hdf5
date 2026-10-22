@@ -352,37 +352,6 @@ func TestBTreeV2_CRC32(t *testing.T) {
 	require.NotEqual(t, expectedChecksum, newChecksum, "Checksum should change when data corrupted")
 }
 
-// TestCompareLinkNames tests link name comparison function.
-func TestCompareLinkNames(t *testing.T) {
-	tests := []struct {
-		name     string
-		a        string
-		b        string
-		expected int
-	}{
-		{"a < b", "a", "b", -1},
-		{"b > a", "b", "a", 1},
-		{"a == a", "a", "a", 0},
-		{"abc < abd", "abc", "abd", -1},
-		{"abd > abc", "abd", "abc", 1},
-		{"UTF-8: apple < banana", "apple", "banana", -1},
-		{"UTF-8: файл < яблоко", "файл", "яблоко", -1},
-		{"UTF-8: 文件 < 苹果", "文件", "苹果", -1},
-		{"Empty strings", "", "", 0},
-		{"Empty vs non-empty", "", "a", -1},
-		{"Non-empty vs empty", "a", "", 1},
-		{"Unicode equal", "café", "café", 0},
-		{"Unicode different", "café", "cafe", 1}, // é > e in UTF-8
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := compareLinkNames(tt.a, tt.b)
-			require.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 // TestJenkinsHash tests Jenkins hash function.
 func TestJenkinsHash(t *testing.T) {
 	tests := []struct {

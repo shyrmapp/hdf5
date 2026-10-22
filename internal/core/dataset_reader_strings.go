@@ -77,7 +77,7 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock, max
 
 	case layout.IsContiguous():
 		// Data is stored contiguously at specific address.
-		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +96,7 @@ func ReadDatasetStrings(r io.ReaderAt, header *ObjectHeader, sb *Superblock, max
 			}
 		}
 
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

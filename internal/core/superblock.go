@@ -67,47 +67,11 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		lengthSize = buf[14]
 		endianness = binary.LittleEndian // v0 files are typically little-endian
 	} else {
-		// For v2 and v3: endianness in byte 9, packed sizes in byte 10
-		// Byte 9: flags byte - bit 0 is endianness (0=LE, 1=BE)
-		switch buf[9] & 0x01 { // Check only bit 0
-		case 0:
-			endianness = binary.LittleEndian
-		case 1:
-			endianness = binary.BigEndian
-		}
-
-		// Byte 10: Size of Offsets
-		// In v2/v3, this can be either:
-		// 1. Direct size value (1, 2, 4, or 8 bytes)
-		// 2. Packed codes (lower 4 bits=offset, upper 4 bits=length)
-		// If the value is a valid size (1/2/4/8), treat it as direct size
-		// Otherwise, treat as packed codes
-		sizesByte := buf[10]
-
-		// Check if it's a direct size value
-		validDirectSizes := map[uint8]bool{1: true, 2: true, 4: true, 8: true}
-		if validDirectSizes[sizesByte] {
-			// Direct size format: byte 10 = offset size, byte 11 = length size (implied 8)
-			offsetSize = sizesByte
-			lengthSize = 8 // HDF5 v2/v3 typically uses 8-byte lengths
-		} else {
-			// Packed format: lower 4 bits = offset code, upper 4 bits = length code
-			// Size codes: 0=1 byte, 1=2 bytes, 2=4 bytes, 3=8 bytes
-			offsetSizeCode := sizesByte & 0x0F        // Lower 4 bits
-			lengthSizeCode := (sizesByte >> 4) & 0x0F // Upper 4 bits
-
-			// Convert codes to actual sizes
-			sizeCodeMap := map[uint8]uint8{0: 1, 1: 2, 2: 4, 3: 8}
-			var ok bool
-			offsetSize, ok = sizeCodeMap[offsetSizeCode]
-			if !ok {
-				return nil, fmt.Errorf("invalid offset size code: %d", offsetSizeCode)
-			}
-			lengthSize, ok = sizeCodeMap[lengthSizeCode]
-			if !ok {
-				return nil, fmt.Errorf("invalid length size code: %d", lengthSizeCode)
-			}
-		}
+		// v2/v3 (spec): byte 9 = size of offsets, byte 10 = size of lengths,
+		// byte 11 = consistency flags. HDF5 metadata is always little-endian.
+		offsetSize = buf[9]
+		lengthSize = buf[10]
+		endianness = binary.LittleEndian
 	}
 
 	// Handle zero sizes (in test files)
@@ -153,7 +117,6 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	}
 
 	if version == Version0 {
-		sb.BaseAddress = 0
 		// Version 0 superblock structure:
 		// Offset 24-31: Base address
 		// Offset 32-39: Free space index
@@ -167,8 +130,17 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		//   80-87: B-tree address (8 bytes) - for cached symbol table
 		//   88-95: Local heap address (8 bytes) - for cached symbol table
 
-		// Read object header address at offset 64
-		sb.RootGroup, err = readValue(64, offsetSize)
+		// Fields after byte 23 are offsetSize wide: base address, free-space
+		// index, EOF, driver info, then the root symbol
+		// table entry: name offset (lengthSize), object header address, cache type (4),
+		// reserved (4), scratch pad (B-tree address, heap address).
+		sb.BaseAddress, err = readValue(24, offsetSize)
+		if err != nil {
+			return nil, fmt.Errorf("base address read failed: %w", err)
+		}
+		entry := 24 + 4*int(offsetSize)
+
+		sb.RootGroup, err = readValue(entry+int(lengthSize), offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("root group address read failed: %w", err)
 		}
@@ -176,12 +148,13 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// ALWAYS read cached B-tree and Heap addresses for v0 files
 		// These are stored in the scratch-pad area when cache type = 1 (H5G_CACHED_STAB)
 		// Even if object header address is non-zero, the symbol table may use these
-		sb.RootBTreeAddr, err = readValue(80, offsetSize)
+		scratch := entry + int(lengthSize) + int(offsetSize) + 8
+		sb.RootBTreeAddr, err = readValue(scratch, offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("b-tree address read failed: %w", err)
 		}
 
-		sb.RootHeapAddr, err = readValue(88, offsetSize)
+		sb.RootHeapAddr, err = readValue(scratch+int(offsetSize), offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("heap address read failed: %w", err)
 		}
@@ -210,6 +183,13 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		}
 		// Note: v2 and v3 have checksum at bytes 44-47, but we don't validate it during read
 		// The HDF5 C library also doesn't enforce checksum validation on read
+	}
+
+	// shortcut: addresses are used as absolute file offsets (osFile is a plain
+	// *os.File), so a non-zero base address cannot be honored; refuse it
+	// instead of reading garbage. Upgrade by wrapping the ReaderAt with an offset.
+	if sb.BaseAddress != 0 {
+		return nil, fmt.Errorf("non-zero superblock base address 0x%x is not supported", sb.BaseAddress)
 	}
 
 	return sb, nil

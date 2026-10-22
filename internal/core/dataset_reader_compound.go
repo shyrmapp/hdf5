@@ -92,13 +92,13 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock, ma
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, err
 		}
 
 	case layout.IsChunked():
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

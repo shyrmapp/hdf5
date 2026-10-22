@@ -22,7 +22,7 @@ type SymbolTableNode struct {
 // - 1 byte: Version (1).
 // - 1 byte: Reserved (0).
 // - 2 bytes: Number of symbols.
-// - Then symbol table entries follow (each entry is offsetSize*2 + 8 + 16 bytes).
+// - Then symbol table entries follow (each entry is lengthSize + offsetSize + 8 + 16 bytes).
 func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*SymbolTableNode, error) {
 	// Read header (8 bytes).
 	header := make([]byte, 8)
@@ -65,12 +65,12 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 	}
 
 	// Each symbol table entry format:
-	// - offsetSize bytes: Link name offset in local heap.
+	// - lengthSize bytes: Link name offset in local heap.
 	// - offsetSize bytes: Object header address.
 	// - 4 bytes: Cache type.
 	// - 4 bytes: Reserved.
 	// - 16 bytes: Scratch-pad (cache-type specific).
-	entrySize := int(sb.OffsetSize)*2 + 4 + 4 + 16
+	entrySize := int(sb.LengthSize) + int(sb.OffsetSize) + 4 + 4 + 16
 
 	// Read all entries.
 	dataSize := int(numSymbols) * entrySize
@@ -90,8 +90,8 @@ func ParseSymbolTableNode(r io.ReaderAt, address uint64, sb *core.Superblock) (*
 		}
 
 		// Read link name offset.
-		linkOffset := readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)
-		offset += int(sb.OffsetSize)
+		linkOffset := readAddressFromBytes(data[offset:], int(sb.LengthSize), sb.Endianness)
+		offset += int(sb.LengthSize)
 
 		// Read object header address.
 		objAddr := readAddressFromBytes(data[offset:], int(sb.OffsetSize), sb.Endianness)

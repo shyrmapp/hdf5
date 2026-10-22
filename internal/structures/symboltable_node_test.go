@@ -206,6 +206,7 @@ func TestParseSymbolTableNode_Success(t *testing.T) {
 			reader := &mockReaderAt{data: tt.data}
 			sb := createMockSuperblock()
 			sb.OffsetSize = tt.offsetSize
+			sb.LengthSize = tt.offsetSize // fixtures encode keys/name offsets at the same width
 
 			node, err := ParseSymbolTableNode(reader, tt.address, sb)
 			require.NoError(t, err)
