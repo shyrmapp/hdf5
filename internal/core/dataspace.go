@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 )
 
 // DataspaceType represents the type of dataspace.
@@ -32,9 +34,12 @@ type DataspaceMessage struct {
 	MaxDims    []uint64 // Maximum dimensions (optional, for resizable datasets).
 }
 
+// maxDataspaceRank is H5S_MAX_RANK.
+const maxDataspaceRank = 32
+
 // ParseDataspaceMessage parses a dataspace message from header message data.
 func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
-	if len(data) < 2 {
+	if len(data) < 3 {
 		return nil, errors.New("dataspace message too short")
 	}
 
@@ -46,6 +51,9 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 	}
 
 	dimensionality := data[1]
+	if dimensionality > maxDataspaceRank {
+		return nil, fmt.Errorf("dataspace rank %d exceeds maximum %d", dimensionality, maxDataspaceRank)
+	}
 	flags := data[2]
 
 	// Bit 0 indicates max dimensions present.
@@ -56,6 +64,18 @@ func ParseDataspaceMessage(data []byte) (*DataspaceMessage, error) {
 
 	ds := &DataspaceMessage{
 		Version: version,
+	}
+
+	// Version 2 carries an explicit type byte; type 2 is the null dataspace.
+	if version == 2 {
+		if len(data) < 4 {
+			return nil, errors.New("dataspace message too short")
+		}
+		if DataspaceType(data[3]) == DataspaceNull {
+			ds.Type = DataspaceNull
+			ds.Dimensions = []uint64{0}
+			return ds, nil
+		}
 	}
 
 	// Determine dataspace type based on dimensionality.
@@ -148,7 +168,11 @@ func (ds *DataspaceMessage) TotalElements() uint64 {
 
 	total := uint64(1)
 	for _, dim := range ds.Dimensions {
-		total *= dim
+		hi, lo := bits.Mul64(total, dim)
+		if hi != 0 {
+			return math.MaxUint64 // saturate; callers' size checks reject it
+		}
+		total = lo
 	}
 	return total
 }
