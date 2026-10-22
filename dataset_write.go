@@ -580,6 +580,9 @@ type GroupMetadata struct {
 
 // FileWriter represents an HDF5 file opened for writing.
 // It wraps a File handle and provides write operations.
+//
+// A FileWriter and the DatasetWriter/GroupWriter handles it returns are not safe
+// for concurrent use; serialize all calls (including Close) externally.
 type FileWriter struct {
 	file     *File
 	writer   *writer.FileWriter

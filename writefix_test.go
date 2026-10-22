@@ -126,3 +126,13 @@ func TestOpenForWriteReadOnlyCloses(t *testing.T) {
 	_, err = ro.CreateDataset("/x", Int32, []uint64{1})
 	require.Error(t, err)
 }
+
+func TestCreateDenseGroupRejectsBlankNames(t *testing.T) {
+	fw, _ := newWriteFile(t)
+	_, err := fw.CreateDataset("/d", Int32, []uint64{1})
+	require.NoError(t, err)
+	require.Error(t, fw.CreateDenseGroup("/", map[string]string{"a": "/d"}))
+	require.Error(t, fw.CreateDenseGroup("/g/", map[string]string{"a": "/d"}))
+	require.Error(t, fw.CreateDenseGroup("/g", map[string]string{"": "/d"}))
+	require.NoError(t, fw.Close())
+}

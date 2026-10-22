@@ -788,6 +788,17 @@ func (fw *FileWriter) CreateDenseGroup(name string, links map[string]string) err
 	if !strings.HasPrefix(name, "/") {
 		return fmt.Errorf("group name must start with /: %s", name)
 	}
+	if name == "/" {
+		return fmt.Errorf("root group already exists")
+	}
+	if err := validateObjectPath(name); err != nil {
+		return err
+	}
+	for linkName := range links {
+		if linkName == "" || strings.Contains(linkName, "/") {
+			return fmt.Errorf("invalid link name %q", linkName)
+		}
+	}
 
 	// Create DenseGroupWriter
 	dgw := writer.NewDenseGroupWriter(name)
