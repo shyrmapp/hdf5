@@ -159,7 +159,8 @@ type WritableDirectBlock struct {
 func NewWritableFractalHeap(blockSize uint64) *WritableFractalHeap {
 	// Compute heap offset and length sizes
 	// Reference: H5HFhdr.c - H5HF__hdr_finish_init_phase1()
-	maxHeapSize := uint16(16) // 16 bits for heap size (65KB max offset)
+	// 32 bits, the C default: HDF5 1.10 rejects a value below log2(block size)+log2(table width).
+	maxHeapSize := uint16(32)
 	heapOffsetSize := uint8((maxHeapSize + 7) / 8)
 
 	// Length size based on max managed object size
