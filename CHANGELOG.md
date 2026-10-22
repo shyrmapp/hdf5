@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dense attributes are read.** The Attribute Info message was matched as
+  type 0x000F (Shared Message Table) instead of 0x0015, and its optional
+  creation-order field was parsed as 4 bytes instead of 2, so every object with
+  more than 8 attributes (netCDF-4 / HDF5 1.8+ files) returned 0 attributes with
+  no error. Reader and writer are fixed. Failures decoding attributes now
+  surface from `Attributes()` instead of yielding an empty list.
+- **Dense links and attributes in larger groups.** One shared read path
+  (`ReadDenseHeapObjects`) now handles fractal heaps whose root is an indirect
+  block (multi-level), B-tree v2 of any depth (internal `BTIN` nodes), the real
+  attribute name/creation-order record layouts (types 8 and 9), and tiny heap
+  IDs. Groups with ~30+ links no longer fail with "invalid direct block
+  signature FHIB" / "btree v2 depth 1 unsupported". Heaps with I/O filters and
+  huge objects indexed through a separate B-tree remain unsupported (clear
+  error).
+- **Group loading no longer drops children silently.** An error loading a
+  child object (or parsing a dense link record) fails the load with the child's
+  name instead of omitting the child and its whole subtree. This exposed a
+  padding bug: v2 object headers whose last message leaves fewer bytes than a
+  message header are now parsed (netCDF dimension-scale datasets were dropped
+  from `dense_links.h5`, which has 17 links, not 16).
+- **Hard-linked groups are listed under every name.** Cycle protection for
+  symbol-table groups tracked every B-tree ever visited, so a group reachable
+  under two names was empty on the second path. It now cuts only true ancestor
+  loops.
+- **Dense attributes written by this library are readable by the HDF5 C
+  library** (`h5dump`, `h5ls`): attribute name index uses B-tree record type 8,
+  fractal-heap direct blocks carry their checksum in the header with heap
+  offsets counted from the block start, and unused heap addresses are written
+  as undefined rather than 0.
+
+### Breaking
+
+- Files with dense attribute storage written by earlier versions of this
+  library are no longer readable by this version (the Attribute Info message
+  type, heap layout and index record layout changed to match the file format).
+  The C library never read them either. Rewrite such files with this version.
+
 ---
 
 ## [v0.17.1] - 2026-09-23
