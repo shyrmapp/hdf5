@@ -44,12 +44,15 @@ const (
 	maxContinuationBlocks = 1024
 	// maxHeaderBlock bounds one object header chunk read for checksum verification.
 	maxHeaderBlock = 256 << 20
+	// maxHeaderMessages bounds the total messages parsed from one object header.
+	maxHeaderMessages = 65536
 )
 
 // contTracker rejects object header continuation cycles and runaway chains.
 type contTracker struct {
-	r    io.ReaderAt
-	seen map[uint64]bool
+	r     io.ReaderAt
+	seen  map[uint64]bool
+	bytes uint64 // summed continuation block sizes
 }
 
 func newContTracker(r io.ReaderAt) *contTracker {
@@ -66,7 +69,22 @@ func (t *contTracker) visit(c continuationInfo) error {
 	if c.Size > maxHeaderBlock || c.Size > blockLimit(t.r, c.Address) {
 		return fmt.Errorf("object header continuation block at 0x%x size %d exceeds file", c.Address, c.Size)
 	}
+	// Legitimate continuation blocks are disjoint, so their sizes cannot sum
+	// past the file; overlapping blocks would otherwise re-read the same bytes
+	// up to maxContinuationBlocks times.
+	t.bytes += c.Size
+	if total, ok := readerSize(t.r); ok && t.bytes > total {
+		return fmt.Errorf("object header continuation blocks total %d bytes, exceeding file size %d", t.bytes, total)
+	}
 	t.seen[c.Address] = true
+	return nil
+}
+
+// checkMessages rejects headers that accumulate more than maxHeaderMessages.
+func checkMessages(n int) error {
+	if n > maxHeaderMessages {
+		return fmt.Errorf("object header has more than %d messages", maxHeaderMessages)
+	}
 	return nil
 }
 

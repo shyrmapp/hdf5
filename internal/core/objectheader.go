@@ -345,6 +345,9 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 				cm.FromContinuation = true
 			}
 			messages = append(messages, contMessages...)
+			if err := checkMessages(len(messages)); err != nil {
+				return nil, "", err
+			}
 			if contName != "" && name == "" {
 				name = contName
 			}
