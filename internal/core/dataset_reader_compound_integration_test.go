@@ -2,40 +2,10 @@ package core
 
 import (
 	"encoding/binary"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-// TestReadDatasetCompound_RealFile tests with actual compound dataset file.
-func TestReadDatasetCompound_RealFile(t *testing.T) {
-	file := "../../testdata/compound_test.h5"
-
-	f, err := os.Open(file)
-	if os.IsNotExist(err) {
-		t.Skipf("Test file not found: %s", file)
-	}
-	require.NoError(t, err)
-	defer f.Close()
-
-	// Read superblock
-	sb, err := ReadSuperblock(f)
-	require.NoError(t, err)
-	require.NotNil(t, sb)
-
-	// This test is skipped for now as it requires object path resolution
-	// Once symbol table walking is implemented, this can be completed
-	t.Skip("requires symbol table walking to find dataset")
-
-	// Future implementation:
-	// objHeader, err := findObjectByPath(f, sb, "/compound_dataset")
-	// require.NoError(t, err)
-	//
-	// data, err := ReadDatasetCompound(f, objHeader, sb, 0)
-	// require.NoError(t, err)
-	// require.NotEmpty(t, data)
-}
 
 // TestReadDatasetCompound_ErrorCases tests error handling.
 func TestReadDatasetCompound_ErrorCases(t *testing.T) {
@@ -130,25 +100,6 @@ func TestReadDatasetCompound_ErrorCases(t *testing.T) {
 			require.Nil(t, data)
 		})
 	}
-}
-
-// TestReadDatasetCompound_EmptyDataset tests reading empty compound datasets.
-func TestReadDatasetCompound_EmptyDataset(t *testing.T) {
-	t.Skip("requires valid compound datatype message with member definitions - complex to build")
-
-	// Building a valid compound datatype message requires:
-	// - Version byte
-	// - Class and flags
-	// - Size (4 bytes)
-	// - Number of members (2 bytes)
-	// - For each member:
-	//   - Name (null-terminated string, padded to multiple of 8)
-	//   - Byte offset (4 bytes, variable depending on version)
-	//   - Dimensionality (1 byte)
-	//   - Reserved bytes
-	//   - Member datatype definition (recursive structure)
-	//
-	// This is too complex for a simple mock - integration tests with real files are better
 }
 
 // TestParseMemberValue_AllTypes tests parsing individual member values.
@@ -368,13 +319,4 @@ func TestCompoundValue_MapStructure(t *testing.T) {
 	require.Equal(t, int32(123), cv["id"])
 	require.Equal(t, "test", cv["name"])
 	require.Equal(t, float64(3.14), cv["value"])
-}
-
-// TestReadDatasetCompound_UnsupportedMemberType tests unsupported member types.
-func TestReadDatasetCompound_UnsupportedMemberType(t *testing.T) {
-	t.Skip("requires creating compound type with unsupported member - complex setup")
-
-	// Future implementation would create a compound type with:
-	// - A member of unsupported datatype (e.g., bitfield)
-	// - Expect error when parsing member value
 }

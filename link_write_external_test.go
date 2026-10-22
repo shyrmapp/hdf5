@@ -345,14 +345,6 @@ func TestValidateExternalFileName(t *testing.T) {
 	}
 }
 
-// TestResolveExternalLink_NotImplemented tests that resolution is not yet implemented.
-// MVP v0.11.5-beta: External link resolution will be added in v0.12.0.
-func TestResolveExternalLink_NotImplemented(t *testing.T) {
-	// External link resolution is not implemented in MVP v0.11.5-beta
-	// This test documents the planned API for v0.12.0
-	t.Skip("External link resolution not implemented in MVP v0.11.5-beta (planned for v0.12.0)")
-}
-
 // Future tests (skipped in MVP v0.11.5-beta):
 // - TestResolveExternalLink_Simple
 // - TestResolveExternalLink_FileNotFound
