@@ -34,63 +34,11 @@ type DatatypeMessage struct {
 	Properties    []byte
 }
 
-// calculateCompoundPropsLen calculates the exact length of compound datatype properties.
-// This is needed for inline parsing of nested compounds, where we can't just take "all remaining".
-//
-// Algorithm:
-//  1. Read member count (4 bytes for v3, 2 bytes embedded in header for v1)
-//  2. For each member:
-//     - Skip name (null-terminated, padded to 8-byte boundary for v1)
-//     - Skip offset field (4 bytes)
-//     - Skip array info (28 bytes for v1, not present in v3)
-//     - Recursively calculate member datatype size
-//  3. Return total properties length
-func calculateCompoundPropsLen(properties []byte, version uint8, depth int) (int, error) {
-	// Version 1 or 2: member count is embedded in ClassBitField (not in properties)
-	// This is complex, so for now return error to use fallback
-	if version != 3 {
-		return 0, errors.New("compound v1/v2 inline size calculation not yet implemented")
-	}
-
-	// Version 3: member count is first 4 bytes
-	if len(properties) < 4 {
-		return 0, errors.New("compound v3 properties too short for member count")
-	}
-	numMembers := binary.LittleEndian.Uint32(properties[0:4])
-	offset := 4
-
-	for i := uint32(0); i < numMembers; i++ {
-		// Skip member name (null-terminated, NOT padded in v3)
-		nameEnd := offset
-		for nameEnd < len(properties) && properties[nameEnd] != 0 {
-			nameEnd++
-		}
-		if nameEnd >= len(properties) {
-			return 0, fmt.Errorf("member %d: name not null-terminated", i)
-		}
-		offset = nameEnd + 1 // Skip past null terminator
-
-		// Skip member offset field (4 bytes)
-		if offset+4 > len(properties) {
-			return 0, fmt.Errorf("member %d: offset field truncated", i)
-		}
-		offset += 4
-
-		// Parse member datatype to calculate its size
-		if offset+8 > len(properties) {
-			return 0, fmt.Errorf("member %d: datatype header truncated", i)
-		}
-
-		// Recursively calculate member datatype size
-		memberDt, err := parseDatatypeMessage(properties[offset:], depth)
-		if err != nil {
-			return 0, fmt.Errorf("member %d: failed to parse datatype: %w", i, err)
-		}
-		memberDtSize := 8 + len(memberDt.Properties)
-		offset += memberDtSize
-	}
-
-	return offset, nil
+// calculateCompoundPropsLen returns the exact length of compound properties,
+// needed to size a compound nested inside another datatype.
+func calculateCompoundPropsLen(properties []byte, version uint8, classBitField, size uint32, depth int) (int, error) {
+	_, n, err := parseCompoundProps(version, classBitField, size, properties, depth)
+	return n, err
 }
 
 // datatypePropsLen returns the exact byte length of a datatype message's
@@ -125,7 +73,7 @@ func datatypePropsLen(
 	case DatatypeEnum:
 		return enumPropsLen(version, classBitField, size, props, depth)
 	case DatatypeCompound:
-		n, err := calculateCompoundPropsLen(props, version, depth+1)
+		n, err := calculateCompoundPropsLen(props, version, classBitField, size, depth+1)
 		return n, err == nil
 	default:
 		return 0, false
@@ -142,26 +90,31 @@ func nestedDatatypeLen(props []byte, depth int) (int, bool) {
 	return 8 + len(base.Properties), true
 }
 
-// arrayPropsLen sizes array properties: dimensionality, dimension sizes, then
-// the base datatype. Version 2 dropped the permutation indices and version 3
-// dropped the reserved bytes.
-func arrayPropsLen(version uint8, props []byte, depth int) (int, bool) {
+// arrayLayout locates an array datatype's dimension sizes and base datatype
+// within its properties: ndims, reserved bytes and permutation indices (both
+// dropped in version 3), dimension sizes, then the base datatype.
+func arrayLayout(version uint8, props []byte) (ndims, dimsOff, baseOff int, ok bool) {
 	if len(props) < 1 {
-		return 0, false
+		return 0, 0, 0, false
 	}
-	ndims := int(props[0])
-	offset := 1
+	ndims = int(props[0])
+	dimsOff = 1
 	if version < 3 {
-		offset += 3 // reserved
+		dimsOff += 3
 	}
-	offset += ndims * 4 // dimension sizes
-	if version < 2 {
-		offset += ndims * 4 // permutation indices
+	baseOff = dimsOff + ndims*4
+	if version < 3 {
+		baseOff += ndims * 4
 	}
-	if offset > len(props) {
+	return ndims, dimsOff, baseOff, baseOff <= len(props)
+}
+
+// arrayPropsLen sizes array properties.
+func arrayPropsLen(version uint8, props []byte, depth int) (int, bool) {
+	_, _, offset, ok := arrayLayout(version, props)
+	if !ok {
 		return 0, false
 	}
-
 	baseLen, ok := nestedDatatypeLen(props[offset:], depth)
 	if !ok {
 		return 0, false

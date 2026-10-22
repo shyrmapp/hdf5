@@ -26,17 +26,19 @@ func TestParseCompoundType(t *testing.T) {
 		{
 			name: "properties too short",
 			dt: &DatatypeMessage{
-				Class:      DatatypeCompound,
-				Properties: []byte{0x01}, // Only 1 byte
+				Class:         DatatypeCompound,
+				Version:       3,
+				ClassBitField: 1,
+				Properties:    []byte{0x01}, // No terminated name
 			},
 			wantErr:     true,
-			errContains: "too short",
+			errContains: "not null-terminated",
 		},
 		{
 			name: "unsupported version",
 			dt: &DatatypeMessage{
 				Class:      DatatypeCompound,
-				Version:    2,
+				Version:    9,
 				Properties: []byte{0x00, 0x00},
 			},
 			wantErr:     true,
@@ -108,21 +110,15 @@ func TestParseCompoundType_Version1(t *testing.T) {
 
 // TestParseCompoundType_Version3 tests version 3 compound parsing.
 func TestParseCompoundType_Version3(t *testing.T) {
-	// Version 3 format: num members(4) + [name + offset(4) + datatype(8+)]*
+	// Version 3 format: [name + offset(1-4 bytes) + datatype(8+)]*; the member
+	// count is in the class bit field.
 	properties := make([]byte, 0, 100)
-
-	// Number of members (4 bytes in v3)
-	numMembers := make([]byte, 4)
-	binary.LittleEndian.PutUint32(numMembers, 1)
-	properties = append(properties, numMembers...)
 
 	// Member: "value"
 	properties = append(properties, []byte("value\x00")...) // Null-terminated
 
-	// Offset (4 bytes)
-	offsetBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(offsetBuf, 0)
-	properties = append(properties, offsetBuf...)
+	// Offset (1 byte: compound size 8 fits in one)
+	properties = append(properties, 0)
 
 	// Member datatype (float64)
 	classAndVer := uint32(DatatypeFloat) | (1 << 4) // class=1, version=1
@@ -132,10 +128,11 @@ func TestParseCompoundType_Version3(t *testing.T) {
 	properties = append(properties, dtBuf...)
 
 	dt := &DatatypeMessage{
-		Class:      DatatypeCompound,
-		Version:    3,
-		Size:       8,
-		Properties: properties,
+		Class:         DatatypeCompound,
+		Version:       3,
+		Size:          8,
+		ClassBitField: 1,
+		Properties:    properties,
 	}
 
 	got, err := ParseCompoundType(dt)
