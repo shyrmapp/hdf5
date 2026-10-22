@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -592,7 +593,7 @@ func TestWriteUint64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := make([]byte, tt.size)
-			writeUint64(buf, tt.value, tt.size, tt.endianness)
+			utils.PutUint(buf, tt.value, tt.size, tt.endianness)
 			require.Equal(t, tt.expected, buf)
 		})
 	}

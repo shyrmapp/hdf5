@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,7 +106,7 @@ func TestReadUint64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := readUint64(tt.data, tt.size, tt.endianness)
+			got := utils.ReadUint(tt.data, tt.size, tt.endianness)
 			require.Equal(t, tt.want, got)
 		})
 	}

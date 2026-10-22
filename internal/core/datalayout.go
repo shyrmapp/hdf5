@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // DataLayoutClass represents the storage layout type.
@@ -146,11 +147,11 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 
 		offset := 2
 		// Read data address.
-		msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		msg.DataAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
 		// Read data size.
-		msg.DataSize = readUint64(data[offset:], int(sb.LengthSize), sb.Endianness)
+		msg.DataSize = utils.ReadUint(data[offset:], int(sb.LengthSize), sb.Endianness)
 
 	case LayoutChunked:
 		// Chunked layout v3: dimensionality + B-tree address + chunk dimensions.
@@ -167,7 +168,7 @@ func parseLayoutV3(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 		if offset+int(sb.OffsetSize) > len(data) {
 			return nil, errors.New("chunked layout address truncated")
 		}
-		msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+		msg.DataAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 
 		// Read chunk dimensions.
@@ -242,7 +243,7 @@ func parseLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 	// element size as a trailing pseudo-dimension.
 	msg.ChunkSize = make([]uint64, dimensionality)
 	for i := 0; i < dimensionality; i++ {
-		msg.ChunkSize[i] = readUint64(data[offset:], encLen, sb.Endianness)
+		msg.ChunkSize[i] = utils.ReadUint(data[offset:], encLen, sb.Endianness)
 		offset += encLen
 	}
 
@@ -260,7 +261,7 @@ func parseLayoutV4(data []byte, sb *Superblock, msg *DataLayoutMessage) (*DataLa
 	if offset+int(sb.OffsetSize) > len(data) {
 		return nil, errors.New("chunked layout v4 address truncated")
 	}
-	msg.DataAddress = readUint64(data[offset:], int(sb.OffsetSize), sb.Endianness)
+	msg.DataAddress = utils.ReadUint(data[offset:], int(sb.OffsetSize), sb.Endianness)
 
 	return msg, nil
 }
@@ -275,7 +276,7 @@ func parseChunkIndexInfo(data []byte, offset int, msg *DataLayoutMessage, sb *Su
 			if offset+int(sb.LengthSize)+4 > len(data) {
 				return 0, errors.New("single chunk filter info truncated")
 			}
-			msg.SingleChunkNBytes = readUint64(data[offset:], int(sb.LengthSize), sb.Endianness)
+			msg.SingleChunkNBytes = utils.ReadUint(data[offset:], int(sb.LengthSize), sb.Endianness)
 			offset += int(sb.LengthSize)
 			msg.SingleChunkFilterMask = sb.Endianness.Uint32(data[offset : offset+4])
 			offset += 4
@@ -318,29 +319,6 @@ func parseChunkIndexInfo(data []byte, offset int, msg *DataLayoutMessage, sb *Su
 	}
 
 	return offset, nil
-}
-
-// Helper function to read variable-sized unsigned integers.
-func readUint64(data []byte, size int, endianness binary.ByteOrder) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	switch size {
-	case 1:
-		return uint64(data[0])
-	case 2:
-		return uint64(endianness.Uint16(data[:2]))
-	case 4:
-		return uint64(endianness.Uint32(data[:4]))
-	case 8:
-		return endianness.Uint64(data[:8])
-	default:
-		// Pad to 8 bytes and read.
-		var buf [8]byte
-		copy(buf[:], data[:size])
-		return endianness.Uint64(buf[:])
-	}
 }
 
 // IsContiguous returns true if layout is contiguous.

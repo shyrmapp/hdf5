@@ -41,14 +41,6 @@ func readFull(r io.ReaderAt, addr uint64, n int) ([]byte, error) {
 	return buf, nil
 }
 
-func readUintLE(b []byte) uint64 {
-	var v uint64
-	for i, c := range b {
-		v |= uint64(c) << (8 * uint(i))
-	}
-	return v
-}
-
 // btreeV2 holds the header fields needed to walk a v2 B-tree.
 type btreeV2 struct {
 	r         io.ReaderAt
@@ -75,9 +67,9 @@ func openBTreeV2(r io.ReaderAt, addr uint64, sb *Superblock) (*btreeV2, error) {
 	nodeSize := e.Uint32(buf[6:])
 	recSize := int(e.Uint16(buf[10:]))
 	b.depth = int(e.Uint16(buf[12:]))
-	b.rootAddr = readAddress(buf[16:16+off], off)
+	b.rootAddr = utils.ReadUint(buf[16:16+off], off, binary.LittleEndian)
 	b.rootRecs = uint64(e.Uint16(buf[16+off:]))
-	b.totalRecs = readUintLE(buf[18+off : 18+off+int(sb.LengthSize)])
+	b.totalRecs = utils.ReadUint(buf[18+off:18+off+int(sb.LengthSize)], len(buf[18+off:18+off+int(sb.LengthSize)]), binary.LittleEndian)
 	b.geo, err = newBTreeV2Geometry(nodeSize, recSize, b.depth, off)
 	return b, err
 }
@@ -114,8 +106,8 @@ func (b *btreeV2) walk(addr, nrec uint64, depth int, out *[][]byte) error {
 	ptrs := buf[6+nrec*rs:]
 	for i := uint64(0); i <= nrec; i++ {
 		p := ptrs[i*ptr:]
-		child := readUint64(p, int(offU), b.sb.Endianness) //nolint:gosec // G115: small
-		childN := readUint64(p[offU:], b.geo.nrecSize, b.sb.Endianness)
+		child := utils.ReadUint(p, int(offU), b.sb.Endianness) //nolint:gosec // G115: small
+		childN := utils.ReadUint(p[offU:], b.geo.nrecSize, b.sb.Endianness)
 		if err := b.walk(child, childN, depth-1, out); err != nil {
 			return err
 		}
@@ -220,13 +212,13 @@ func openFractalHeap(r io.ReaderAt, addr uint64, sb *Superblock) (*fractalHeap, 
 	p := 14 + 10*ln + 2*off
 	h.width = uint64(e.Uint16(buf[p:]))
 	p += 2
-	h.startBlock = readUintLE(buf[p : p+ln])
+	h.startBlock = utils.ReadUint(buf[p:p+ln], len(buf[p:p+ln]), binary.LittleEndian)
 	p += ln
-	h.maxDirect = readUintLE(buf[p : p+ln])
+	h.maxDirect = utils.ReadUint(buf[p:p+ln], len(buf[p:p+ln]), binary.LittleEndian)
 	p += ln
 	maxHeapBits := int(e.Uint16(buf[p:]))
 	p += 4 // max heap size + starting rows in root
-	h.rootAddr = readAddress(buf[p:p+off], off)
+	h.rootAddr = utils.ReadUint(buf[p:p+off], off, binary.LittleEndian)
 	p += off
 	h.curRows = uint64(e.Uint16(buf[p:]))
 
@@ -267,8 +259,8 @@ func (h *fractalHeap) object(id []byte) ([]byte, error) {
 		if 1+h.offBytes+h.lenBytes > len(id) {
 			return nil, fmt.Errorf("heap ID too short: %d bytes", len(id))
 		}
-		off := readUintLE(id[1 : 1+h.offBytes])
-		length := readUintLE(id[1+h.offBytes : 1+h.offBytes+h.lenBytes])
+		off := utils.ReadUint(id[1:1+h.offBytes], len(id[1:1+h.offBytes]), binary.LittleEndian)
+		length := utils.ReadUint(id[1+h.offBytes:1+h.offBytes+h.lenBytes], len(id[1+h.offBytes:1+h.offBytes+h.lenBytes]), binary.LittleEndian)
 		return h.managed(off, length)
 	case 2: // tiny: length-1 in the low nibble, data follows
 		n := int(id[0]&0x0F) + 1
@@ -281,11 +273,11 @@ func (h *fractalHeap) object(id []byte) ([]byte, error) {
 		if 1+o+l > len(id) {
 			return nil, errors.New("huge heap object indexed through a B-tree is not supported")
 		}
-		length := readUintLE(id[1+o : 1+o+l])
+		length := utils.ReadUint(id[1+o:1+o+l], len(id[1+o:1+o+l]), binary.LittleEndian)
 		if length > 1<<30 {
 			return nil, fmt.Errorf("huge heap object of %d bytes refused", length)
 		}
-		return readFull(h.r, readAddress(id[1:1+o], o), int(length))
+		return readFull(h.r, utils.ReadUint(id[1:1+o], o, binary.LittleEndian), int(length))
 	}
 	return nil, fmt.Errorf("unsupported heap ID type %d", (id[0]>>4)&3)
 }
@@ -339,7 +331,7 @@ func (h *fractalHeap) indirect(addr, nrows, base, off, length uint64, level int)
 		return nil, err
 	}
 	entry := 5 + o + uint64(h.offBytes) + (row*h.width+col)*o //nolint:gosec // G115: small
-	child := readAddress(blk[entry:entry+o], int(h.sb.OffsetSize))
+	child := utils.ReadUint(blk[entry:entry+o], int(h.sb.OffsetSize), binary.LittleEndian)
 	if isUndefinedAddress(child, h.sb.OffsetSize) {
 		return nil, fmt.Errorf("heap offset 0x%X is in an unallocated block", off)
 	}

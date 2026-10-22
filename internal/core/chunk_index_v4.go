@@ -217,15 +217,15 @@ func decodeChunkElement(elt []byte, clientID uint8, sb *Superblock, layout *Data
 		if len(elt) < offsetSize {
 			return entry, false, errors.New("chunk index element too short")
 		}
-		entry.Address = readUint64(elt, offsetSize, sb.Endianness)
+		entry.Address = utils.ReadUint(elt, offsetSize, sb.Endianness)
 		entry.NBytes = layout.chunkStoreBytes()
 	case 1:
 		sizeLen := len(elt) - offsetSize - 4
 		if sizeLen < 1 || sizeLen > 8 {
 			return entry, false, fmt.Errorf("invalid filtered chunk element size: %d bytes", len(elt))
 		}
-		entry.Address = readUint64(elt, offsetSize, sb.Endianness)
-		entry.NBytes = readUint64(elt[offsetSize:], sizeLen, sb.Endianness)
+		entry.Address = utils.ReadUint(elt, offsetSize, sb.Endianness)
+		entry.NBytes = utils.ReadUint(elt[offsetSize:], sizeLen, sb.Endianness)
 		entry.FilterMask = sb.Endianness.Uint32(elt[offsetSize+sizeLen:])
 	default:
 		return entry, false, fmt.Errorf("unsupported chunk index client id: %d", clientID)
@@ -260,8 +260,8 @@ func parseFixedArrayHeader(r io.ReaderAt, addr uint64, sb *Superblock) (*fixedAr
 	hdr := &fixedArrayHeader{
 		clientID:  buf[5],
 		entrySize: uint64(buf[6]),
-		maxNelmts: readUint64(buf[8:], lengthSize, sb.Endianness),
-		dblkAddr:  readUint64(buf[8+lengthSize:], int(sb.OffsetSize), sb.Endianness),
+		maxNelmts: utils.ReadUint(buf[8:], lengthSize, sb.Endianness),
+		dblkAddr:  utils.ReadUint(buf[8+lengthSize:], int(sb.OffsetSize), sb.Endianness),
 	}
 	hdr.pageBits = buf[7]
 
@@ -513,7 +513,7 @@ func (w *extArrayWalker) dataBlockAddress(sblk, dblkIdx uint64) (uint64, bool, e
 	var dblkAddr uint64
 	if sblk < info.iblkNsblks {
 		off := dblkAddrsOff + (info.sblkDblk[sblk]+dblkIdx)*offU
-		dblkAddr = readUint64(w.iblk[off:], int(w.sb.OffsetSize), w.sb.Endianness)
+		dblkAddr = utils.ReadUint(w.iblk[off:], int(w.sb.OffsetSize), w.sb.Endianness)
 	} else {
 		var ok bool
 		var err error
@@ -537,7 +537,7 @@ func (w *extArrayWalker) superBlockDataBlockAddress(sblk, dblkIdx uint64) (uint6
 	sblkAddrsOff := 6 + offU + info.idxBlkElmts*info.eltSize + info.nDblkAddrs*offU
 
 	off := sblkAddrsOff + (sblk-info.iblkNsblks)*offU
-	sblkAddr := readUint64(w.iblk[off:], int(w.sb.OffsetSize), w.sb.Endianness)
+	sblkAddr := utils.ReadUint(w.iblk[off:], int(w.sb.OffsetSize), w.sb.Endianness)
 	if isUndefinedAddress(sblkAddr, w.sb.OffsetSize) {
 		w.skipTo = info.idxBlkElmts + info.sblkStart[sblk] + info.sblkNdblks[sblk]*info.sblkNelmts[sblk]
 		return 0, false, nil
@@ -552,7 +552,7 @@ func (w *extArrayWalker) superBlockDataBlockAddress(sblk, dblkIdx uint64) (uint6
 		}
 		w.sblkCache[sblkAddr] = sblkData
 	}
-	return readUint64(sblkData[dblkIdx*offU:], int(w.sb.OffsetSize), w.sb.Endianness), true, nil
+	return utils.ReadUint(sblkData[dblkIdx*offU:], int(w.sb.OffsetSize), w.sb.Endianness), true, nil
 }
 
 // readSuperBlock reads an "EASB" super block and returns its raw data block
@@ -610,7 +610,7 @@ func extensibleArrayChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *S
 	if err != nil {
 		return nil, err
 	}
-	iblkAddr := readUint64(hdr[12+6*lenU:], int(sb.OffsetSize), sb.Endianness)
+	iblkAddr := utils.ReadUint(hdr[12+6*lenU:], int(sb.OffsetSize), sb.Endianness)
 	if isUndefinedAddress(iblkAddr, sb.OffsetSize) {
 		return nil, nil
 	}
@@ -674,12 +674,12 @@ const (
 // 4-byte filter mask + scaled offsets. Reference: H5Dbtree2.c.
 func decodeBTreeV2ChunkRecord(rec []byte, recType uint8, sizeLen, rank int, layout *DataLayoutMessage, sb *Superblock) ChunkLocation {
 	entry := ChunkLocation{
-		Address: readUint64(rec, int(sb.OffsetSize), sb.Endianness),
+		Address: utils.ReadUint(rec, int(sb.OffsetSize), sb.Endianness),
 		NBytes:  layout.chunkStoreBytes(),
 	}
 	off := int(sb.OffsetSize)
 	if recType == btreeV2TypeChunksFiltered {
-		entry.NBytes = readUint64(rec[off:], sizeLen, sb.Endianness)
+		entry.NBytes = utils.ReadUint(rec[off:], sizeLen, sb.Endianness)
 		off += sizeLen
 		entry.FilterMask = sb.Endianness.Uint32(rec[off:])
 		off += 4
@@ -797,8 +797,8 @@ func (w *btreeV2ChunkWalker) walk(addr, nrec uint64, depth int) error {
 	ptrs := buf[6+nrec*recSize:]
 	for i := uint64(0); i <= nrec; i++ {
 		p := ptrs[i*ptrSize:]
-		child := readUint64(p, int(offU), w.sb.Endianness) //nolint:gosec // G115: value bounded by the enclosing length checks
-		childN := readUint64(p[offU:], w.geo.nrecSize, w.sb.Endianness)
+		child := utils.ReadUint(p, int(offU), w.sb.Endianness) //nolint:gosec // G115: value bounded by the enclosing length checks
+		childN := utils.ReadUint(p[offU:], w.geo.nrecSize, w.sb.Endianness)
 		if err := w.walk(child, childN, depth-1); err != nil {
 			return err
 		}
@@ -834,9 +834,9 @@ func btreeV2ChunkEntries(r io.ReaderAt, layout *DataLayoutMessage, sb *Superbloc
 	nodeSize := sb.Endianness.Uint32(buf[6:])
 	recSize := int(sb.Endianness.Uint16(buf[10:]))
 	depth := int(sb.Endianness.Uint16(buf[12:]))
-	rootAddr := readUint64(buf[16:], offsetSize, sb.Endianness)
+	rootAddr := utils.ReadUint(buf[16:], offsetSize, sb.Endianness)
 	rootNrec := uint64(sb.Endianness.Uint16(buf[16+offsetSize:]))
-	total := readUint64(buf[18+offsetSize:], int(sb.LengthSize), sb.Endianness)
+	total := utils.ReadUint(buf[18+offsetSize:], int(sb.LengthSize), sb.Endianness)
 
 	if recType != btreeV2TypeChunksUnfiltered && recType != btreeV2TypeChunksFiltered {
 		return nil, fmt.Errorf("unexpected v2 b-tree record type for chunk index: %d", recType)

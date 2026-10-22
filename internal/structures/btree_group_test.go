@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -433,7 +434,7 @@ func TestReadAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := readAddress(tt.data, tt.size, binary.LittleEndian)
+			result := utils.ReadUint(tt.data, tt.size, binary.LittleEndian)
 			require.Equal(t, tt.expected, result)
 		})
 	}
@@ -442,15 +443,15 @@ func TestReadAddress(t *testing.T) {
 func TestReadAddress_BigEndian(t *testing.T) {
 	// Test big-endian reading
 	data := []byte{0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}
-	result := readAddress(data, 8, binary.BigEndian)
+	result := utils.ReadUint(data, 8, binary.BigEndian)
 	require.Equal(t, uint64(0x123456789ABCDEF0), result)
 
 	// 4 bytes big-endian
-	result4 := readAddress(data[:4], 4, binary.BigEndian)
+	result4 := utils.ReadUint(data[:4], 4, binary.BigEndian)
 	require.Equal(t, uint64(0x12345678), result4)
 
 	// 2 bytes big-endian
-	result2 := readAddress(data[:2], 2, binary.BigEndian)
+	result2 := utils.ReadUint(data[:2], 2, binary.BigEndian)
 	require.Equal(t, uint64(0x1234), result2)
 }
 
@@ -491,6 +492,6 @@ func BenchmarkReadAddress(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = readAddress(data, 8, binary.LittleEndian)
+		_ = utils.ReadUint(data, 8, binary.LittleEndian)
 	}
 }

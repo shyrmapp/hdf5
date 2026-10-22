@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // Fractal heap write constants.
@@ -507,11 +508,11 @@ func (fh *WritableFractalHeap) encodeHeapID(offset, length uint64) []byte {
 
 	// Encode offset (little-endian), counted from the start of the block
 	idx := 1
-	writeUintVar(heapID[idx:], offset+fh.dblockOverhead(), int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	utils.PutUint(heapID[idx:], offset+fh.dblockOverhead(), int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 
 	// Encode length (little-endian)
-	writeUintVar(heapID[idx:], length, int(fh.Header.HeapLengthSize), binary.LittleEndian)
+	utils.PutUint(heapID[idx:], length, int(fh.Header.HeapLengthSize), binary.LittleEndian)
 	// Remaining bytes stay zero-padded
 
 	return heapID
@@ -646,46 +647,46 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	offset += 4
 
 	// Next Huge Object ID
-	writeUintVar(buf[offset:], fh.Header.NextHugeObjectID, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.NextHugeObjectID, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Huge Object B-tree Address (undefined when the heap has no huge objects)
-	writeUintVar(buf[offset:], undefinedIfZero(fh.Header.HugeObjectBTreeAddr), int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], undefinedIfZero(fh.Header.HugeObjectBTreeAddr), int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Free Space Amount
-	writeUintVar(buf[offset:], fh.Header.FreeSpace, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.FreeSpace, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Free Section Address (undefined when there is no free-space manager)
-	writeUintVar(buf[offset:], undefinedIfZero(fh.Header.FreeSectionAddress), int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], undefinedIfZero(fh.Header.FreeSectionAddress), int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Managed Space Statistics (4 fields)
-	writeUintVar(buf[offset:], fh.Header.ManagedSpaceSize, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.ManagedSpaceSize, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	writeUintVar(buf[offset:], fh.Header.AllocatedManagedSpace, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.AllocatedManagedSpace, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	writeUintVar(buf[offset:], fh.Header.ManagedSpaceOffset, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.ManagedSpaceOffset, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	writeUintVar(buf[offset:], fh.Header.NumManagedObjects, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.NumManagedObjects, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Huge Object Statistics (2 fields)
-	writeUintVar(buf[offset:], fh.Header.SizeHugeObjects, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.SizeHugeObjects, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	writeUintVar(buf[offset:], fh.Header.NumHugeObjects, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.NumHugeObjects, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Tiny Object Statistics (2 fields)
-	writeUintVar(buf[offset:], fh.Header.SizeTinyObjects, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.SizeTinyObjects, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
-	writeUintVar(buf[offset:], fh.Header.NumTinyObjects, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.NumTinyObjects, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Doubling Table Parameters
@@ -694,11 +695,11 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	offset += 2
 
 	// Starting Block Size
-	writeUintVar(buf[offset:], fh.Header.StartingBlockSize, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.StartingBlockSize, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Max Direct Block Size
-	writeUintVar(buf[offset:], fh.Header.MaxDirectBlockSize, int(sb.LengthSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.MaxDirectBlockSize, int(sb.LengthSize), sb.Endianness)
 	offset += int(sb.LengthSize)
 
 	// Max Heap Size (log2 bits)
@@ -710,7 +711,7 @@ func (fh *WritableFractalHeap) writeHeaderAt(writer Writer, addr uint64, sb *cor
 	offset += 2
 
 	// Root Block Address
-	writeUintVar(buf[offset:], fh.Header.RootBlockAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.Header.RootBlockAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Current Number of Rows
@@ -744,10 +745,10 @@ func (fh *WritableFractalHeap) writeDirectBlockAt(writer Writer, addr uint64, sb
 	buf[offset] = fh.DirectBlock.Version
 	offset++
 
-	writeUintVar(buf[offset:], fh.DirectBlock.HeapHeaderAddress, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.DirectBlock.HeapHeaderAddress, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
-	writeUintVar(buf[offset:], fh.DirectBlock.BlockOffset, int(fh.Header.HeapOffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], fh.DirectBlock.BlockOffset, int(fh.Header.HeapOffsetSize), sb.Endianness)
 	offset += int(fh.Header.HeapOffsetSize)
 
 	checksumAt := -1
@@ -803,7 +804,7 @@ func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, addre
 	offset++
 
 	// Heap Header Address (sizeof_addr bytes)
-	dblock.HeapHeaderAddr = readUint(buf[offset:offset+int(fileOffsetSize)], int(fileOffsetSize), endianness)
+	dblock.HeapHeaderAddr = utils.ReadUint(buf[offset:offset+int(fileOffsetSize)], int(fileOffsetSize), endianness)
 	offset += int(fileOffsetSize)
 
 	// Verify heap header address matches
@@ -813,7 +814,7 @@ func (fh *WritableFractalHeap) readDirectBlockFromFile(reader io.ReaderAt, addre
 	}
 
 	// Block Offset (heap_off_size bytes)
-	dblock.BlockOffset = readUint(buf[offset:offset+int(heapOffsetSize)], int(heapOffsetSize), endianness)
+	dblock.BlockOffset = utils.ReadUint(buf[offset:offset+int(heapOffsetSize)], int(heapOffsetSize), endianness)
 	offset += int(heapOffsetSize)
 
 	// Checksum sits in the block header (not validated); data follows it.
@@ -970,14 +971,14 @@ func (fh *WritableFractalHeap) GetObject(heapID []byte) ([]byte, error) {
 	}
 
 	idx := 1
-	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 	globalOffset, err := fh.objectIndex(heapOffset)
 	if err != nil {
 		return nil, err
 	}
 
-	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
+	length := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
 	// Route to appropriate retrieval method based on heap structure
 	if fh.RootIndirectBlock != nil {
@@ -1080,14 +1081,14 @@ func (fh *WritableFractalHeap) OverwriteObject(heapID, newData []byte) error {
 	}
 
 	idx := 1
-	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 	offset, err := fh.objectIndex(heapOffset)
 	if err != nil {
 		return err
 	}
 
-	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
+	length := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
 	// Verify new data is same size
 	if uint64(len(newData)) != length {
@@ -1152,14 +1153,14 @@ func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 	}
 
 	idx := 1
-	heapOffset := readUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
+	heapOffset := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapOffsetSize)], int(fh.Header.HeapOffsetSize), binary.LittleEndian)
 	idx += int(fh.Header.HeapOffsetSize)
 	offset, err := fh.objectIndex(heapOffset)
 	if err != nil {
 		return err
 	}
 
-	length := readUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
+	length := utils.ReadUint(heapID[idx:idx+int(fh.Header.HeapLengthSize)], int(fh.Header.HeapLengthSize), binary.LittleEndian)
 
 	// Validate offset
 	if offset >= uint64(len(fh.DirectBlock.Objects)) {
@@ -1184,29 +1185,6 @@ func (fh *WritableFractalHeap) DeleteObject(heapID []byte) error {
 	// This is correct - deleted objects increase free space but don't reduce allocated
 
 	return nil
-}
-
-// writeUintVar writes a variable-length unsigned integer.
-func writeUintVar(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
-	switch size {
-	case 1:
-		buf[0] = uint8(value) //nolint:gosec // G115: Explicit truncation to byte
-	case 2:
-		endianness.PutUint16(buf[:2], uint16(value)) //nolint:gosec // G115: Size validated by caller
-	case 4:
-		endianness.PutUint32(buf[:4], uint32(value)) //nolint:gosec // G115: Size validated by caller
-	case 8:
-		endianness.PutUint64(buf[:8], value)
-	default:
-		// Variable size - write as bytes
-		for i := 0; i < size && i < 8; i++ {
-			if endianness == binary.LittleEndian {
-				buf[i] = uint8(value >> (8 * i)) //nolint:gosec // G115: Byte extraction from uint64
-			} else {
-				buf[size-1-i] = uint8(value >> (8 * i)) //nolint:gosec // G115: Byte extraction from uint64
-			}
-		}
-	}
 }
 
 // undefinedIfZero maps the unset address 0 to the HDF5 "undefined" address (all ones);

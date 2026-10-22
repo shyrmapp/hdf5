@@ -10,6 +10,7 @@ import (
 
 	"github.com/shyrmapp/hdf5/internal/core"
 	"github.com/shyrmapp/hdf5/internal/structures"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // DenseGroupWriter manages dense group creation.
@@ -239,7 +240,7 @@ func (dgw *DenseGroupWriter) createLinkMessage(link denseLink, sb *core.Superblo
 	offset += len(nameBytes)
 
 	// Link Info: For hard link, this is the target object header address
-	writeUint64(buf[offset:], link.targetAddr, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], link.targetAddr, int(sb.OffsetSize), sb.Endianness)
 
 	return buf
 }
@@ -345,20 +346,5 @@ func encodeCompactUint64(buf []byte, value uint64) {
 	size := compactUint64Size(value)
 	for i := 0; i < size; i++ {
 		buf[i] = byte(value >> (8 * i)) //nolint:gosec // G115: variable-size encoding
-	}
-}
-
-// writeUint64 writes a uint64 value to buffer with specified size and endianness.
-// This is a helper function for encoding fields with variable sizes.
-func writeUint64(buf []byte, value uint64, size int, endianness binary.ByteOrder) {
-	switch size {
-	case 1:
-		buf[0] = byte(value) //nolint:gosec // G115: variable-size encoding
-	case 2:
-		endianness.PutUint16(buf, uint16(value)) //nolint:gosec // Safe: size limited to 2 bytes
-	case 4:
-		endianness.PutUint32(buf, uint32(value)) //nolint:gosec // Safe: size limited to 4 bytes
-	case 8:
-		endianness.PutUint64(buf, value)
 	}
 }

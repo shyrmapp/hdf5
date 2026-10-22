@@ -1,10 +1,12 @@
 package hdf5
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // errHeaderFull means a message fits neither in the object header's
@@ -78,20 +80,11 @@ func (fw *FileWriter) patchHeaderMessage(addr uint64, oh *core.ObjectHeader, msg
 		if c.Type != core.MsgContinuation || len(c.Data) < int(sb.OffsetSize+sb.LengthSize) {
 			continue
 		}
-		caddr := readUint(c.Data[:sb.OffsetSize])
-		csize := readUint(c.Data[sb.OffsetSize : sb.OffsetSize+sb.LengthSize])
+		caddr := utils.ReadUint(c.Data[:sb.OffsetSize], len(c.Data[:sb.OffsetSize]), binary.LittleEndian)
+		csize := utils.ReadUint(c.Data[sb.OffsetSize:sb.OffsetSize+sb.LengthSize], len(c.Data[sb.OffsetSize:sb.OffsetSize+sb.LengthSize]), binary.LittleEndian)
 		if msg.Offset >= caddr && msg.Offset < caddr+csize {
 			return fw.refreshChecksum(caddr, int64(csize)-4) //nolint:gosec // G115: OCHK size is small
 		}
 	}
 	return fmt.Errorf("continuation block of header message at 0x%X not found", msg.Offset)
-}
-
-// readUint decodes a little-endian unsigned integer of up to 8 bytes.
-func readUint(b []byte) uint64 {
-	var v uint64
-	for i := len(b) - 1; i >= 0; i-- {
-		v = v<<8 | uint64(b[i])
-	}
-	return v
 }

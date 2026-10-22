@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // WritableIndirectBlock represents an indirect block for writing.
@@ -208,16 +209,16 @@ func (wb *WritableIndirectBlock) writeAt(writer Writer, address uint64, sb *core
 	offset++
 
 	// Heap Header Address (sizeof_addr bytes)
-	writeUintVar(buf[offset:], wb.Header.HeapHeaderAddr, int(sb.OffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], wb.Header.HeapHeaderAddr, int(sb.OffsetSize), sb.Endianness)
 	offset += int(sb.OffsetSize)
 
 	// Block Offset (heap_off_size bytes)
-	writeUintVar(buf[offset:], wb.Header.BlockOffset, int(heapOffsetSize), sb.Endianness)
+	utils.PutUint(buf[offset:], wb.Header.BlockOffset, int(heapOffsetSize), sb.Endianness)
 	offset += int(heapOffsetSize)
 
 	// Child Block Addresses (K×M entries, sizeof_addr each)
 	for _, addr := range wb.ChildAddresses {
-		writeUintVar(buf[offset:], addr, int(sb.OffsetSize), sb.Endianness)
+		utils.PutUint(buf[offset:], addr, int(sb.OffsetSize), sb.Endianness)
 		offset += int(sb.OffsetSize)
 	}
 

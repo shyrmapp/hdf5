@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/shyrmapp/hdf5/internal/core"
+	"github.com/shyrmapp/hdf5/internal/utils"
 )
 
 // ReadGroupBTreeEntries reads entries from a "TREE" format B-tree (type 0 - group symbol table).
@@ -91,7 +92,7 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 		pos += keySize
 
 		// Read child address (SNOD) using file's endianness
-		childAddr := readAddress(data[pos:], int(sb.OffsetSize), sb.Endianness)
+		childAddr := utils.ReadUint(data[pos:], int(sb.OffsetSize), sb.Endianness)
 		pos += int(sb.OffsetSize)
 
 		if childAddr != 0 && childAddr != 0xFFFFFFFFFFFFFFFF {
@@ -123,31 +124,6 @@ func ReadGroupBTreeEntries(r io.ReaderAt, address uint64, sb *core.Superblock) (
 	}
 
 	return allEntries, nil
-}
-
-// readAddress reads a variable-sized address from byte slice using the specified endianness.
-//
-//nolint:gosec // G602: bounds are checked by clamping size to len(data) before switch
-func readAddress(data []byte, size int, endianness binary.ByteOrder) uint64 {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	switch size {
-	case 1:
-		return uint64(data[0])
-	case 2:
-		return uint64(endianness.Uint16(data[:2]))
-	case 4:
-		return uint64(endianness.Uint32(data[:4]))
-	case 8:
-		return endianness.Uint64(data[:8])
-	default:
-		// Pad to 8 bytes.
-		var buf [8]byte
-		copy(buf[:], data[:size])
-		return endianness.Uint64(buf[:])
-	}
 }
 
 // BTreeNodeV1 represents a B-tree version 1 node for group symbol tables.
@@ -241,11 +217,11 @@ func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8,
 	pos += 2
 
 	// Write left sibling
-	writeAddr(buf[pos:], btn.LeftSibling, int(offsetSize), endianness)
+	utils.PutUint(buf[pos:], btn.LeftSibling, int(offsetSize), endianness)
 	pos += int(offsetSize)
 
 	// Write right sibling
-	writeAddr(buf[pos:], btn.RightSibling, int(offsetSize), endianness)
+	utils.PutUint(buf[pos:], btn.RightSibling, int(offsetSize), endianness)
 	pos += int(offsetSize)
 
 	// Write keys and children (interleaved)
@@ -257,7 +233,7 @@ func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8,
 		}
 		// If i >= len(Keys), key is 0 (padding)
 
-		writeAddr(buf[pos:], key, int(offsetSize), endianness)
+		utils.PutUint(buf[pos:], key, int(offsetSize), endianness)
 		pos += int(offsetSize)
 
 		// After each key (except the last), write a child pointer
@@ -267,7 +243,7 @@ func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8,
 				child = btn.ChildPointers[i]
 			}
 
-			writeAddr(buf[pos:], child, int(offsetSize), endianness)
+			utils.PutUint(buf[pos:], child, int(offsetSize), endianness)
 			pos += int(offsetSize)
 		}
 	}
@@ -275,30 +251,4 @@ func (btn *BTreeNodeV1) WriteAt(w io.WriterAt, address uint64, offsetSize uint8,
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.WriterAt interface
 	_, err := w.WriteAt(buf, int64(address))
 	return err
-}
-
-// writeAddr writes a variable-sized address to byte slice.
-func writeAddr(data []byte, addr uint64, size int, endianness binary.ByteOrder) {
-	if size > len(data) {
-		size = len(data)
-	}
-
-	// Use data[:size] for all slicing so gosec can verify bounds statically.
-	d := data[:size]
-
-	switch size {
-	case 1:
-		d[0] = byte(addr) //nolint:gosec // G115: variable-size address encoding
-	case 2:
-		endianness.PutUint16(d, uint16(addr)) //nolint:gosec // Safe: address size matches offset size
-	case 4:
-		endianness.PutUint32(d, uint32(addr)) //nolint:gosec // Safe: address size matches offset size
-	case 8:
-		endianness.PutUint64(d, addr)
-	default:
-		// Pad to requested size.
-		var buf [8]byte
-		endianness.PutUint64(buf[:], addr)
-		copy(d, buf[:size])
-	}
 }
