@@ -114,8 +114,17 @@ func (fw *FileWriter) writeRefCount(addr uint64, oh *core.ObjectHeader, sb *core
 		return nil
 	}
 
-	// V2: Update or add RefCount message (type 0x0016).
-	// Body: version byte (0) + uint32 count (H5Orefcount.c).
+	// V2: patch or add the RefCount message within the header's allocation.
+	legacy := false
+	for _, msg := range oh.Messages {
+		legacy = legacy || (msg.Type == core.MsgRefCount && len(msg.Data) == 4)
+	}
+	if !legacy {
+		return writeV2RefCount(fw, addr, oh)
+	}
+
+	// Pre-v0.15 files stored the count without the version byte; rewrite those
+	// headers whole.
 	refCountData := make([]byte, 5)
 	refCountData[0] = 0 // message version
 	sb.Endianness.PutUint32(refCountData[1:], oh.ReferenceCount)
