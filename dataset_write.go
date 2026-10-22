@@ -550,6 +550,9 @@ const groupLeafNodeK = 4
 // Per C reference (H5Gnode.c:598): split when nsyms >= 2 * H5F_SYM_LEAF_K(f).
 const snodCapacity = 2 * groupLeafNodeK // 8
 
+// groupBTreeK is the group B-tree internal node K (superblock-wide).
+const groupBTreeK = 16
+
 // snodEntrySize is the on-disk size of each SNOD entry (for 8-byte offsets).
 // Format: offsetSize*2 + 4 (cache type) + 4 (reserved) + 16 (scratch-pad) = 40 bytes.
 const snodEntrySize = 2*8 + 4 + 4 + 16 // 40
@@ -2466,7 +2469,6 @@ func createRootGroupStructureV0(fw *writer.FileWriter) (*rootGroupInfo, error) {
 	// where K=16 (GroupInternalNodeK). Full size: 24 + 33*8 + 32*8 = 544 bytes.
 	// Must reserve the FULL B-tree size even though only 1 child is initially used,
 	// because WriteAt writes the complete 544-byte buffer (with zero padding).
-	const groupBTreeK = 16
 	btreeSize := uint64(8 + 2*offsetSize + (2*groupBTreeK+1)*offsetSize + 2*groupBTreeK*offsetSize)
 
 	// Symbol table node size: 8-byte header + snodCapacity * 40 bytes per entry.

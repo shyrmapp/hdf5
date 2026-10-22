@@ -350,21 +350,6 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 		btreeAddr = meta.btreeAddr
 	}
 
-	// Step 1: Read existing local heap.
-	heap, err := fw.readLocalHeap(heapAddr)
-	if err != nil {
-		return fmt.Errorf("read local heap: %w", err)
-	}
-
-	// Step 2: Add child name to heap. If full, expand.
-	nameOffset, err := heap.AddString(childName)
-	if err != nil {
-		heap, heapAddr, nameOffset, err = fw.expandHeapAndAdd(heap, heapAddr, parentPath, childName)
-		if err != nil {
-			return err
-		}
-	}
-
 	// Step 3: Read ALL SNODs in this group (the B-tree may have multiple children after splits).
 	btreeNode, snodAddrs, err := fw.readGroupBTree(btreeAddr)
 	if err != nil {
@@ -379,6 +364,28 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 			return fmt.Errorf("read SNOD at 0x%X: %w", addr, readErr)
 		}
 		allEntries = append(allEntries, sn.Entries...)
+	}
+
+	// The group B-tree is a single leaf node sized for K=16 (fixed by the
+	// superblock): at most 2K SNODs. Fail before touching the file.
+	// shortcut: no multi-level B-tree; upgrade if >256 children per group is needed.
+	if len(allEntries)+1 > 2*groupBTreeK*snodCapacity {
+		return fmt.Errorf("group %q is full: v0 symbol-table groups hold at most %d children", parentPath, 2*groupBTreeK*snodCapacity)
+	}
+
+	// Step 1: Read existing local heap.
+	heap, err := fw.readLocalHeap(heapAddr)
+	if err != nil {
+		return fmt.Errorf("read local heap: %w", err)
+	}
+
+	// Step 2: Add child name to heap. If full, expand.
+	nameOffset, err := heap.AddString(childName)
+	if err != nil {
+		heap, heapAddr, nameOffset, err = fw.expandHeapAndAdd(heap, heapAddr, parentPath, childName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Add the new entry.
@@ -427,7 +434,6 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 	// Step 4: Rebuild and write B-tree FIRST (before SNODs).
 	// For v0 format with fixed addresses, the B-tree write must complete before SNOD writes
 	// to avoid overwriting SNOD data with B-tree zero padding.
-	const groupBTreeK = 16 // B-tree internal node K (separate from GroupLeafNodeK).
 	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
 
 	for i := 0; i < numSNODs; i++ {
@@ -956,7 +962,6 @@ func (fw *FileWriter) unlinkFromParent(parentPath, childName string) (uint64, er
 	offsetSize := fw.file.sb.OffsetSize
 
 	// Rebuild B-tree.
-	const groupBTreeK = 16
 	newBTree := structures.NewBTreeNodeV1(0, groupBTreeK)
 
 	if len(allEntries) > 0 {
