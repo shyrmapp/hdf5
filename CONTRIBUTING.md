@@ -193,7 +193,6 @@ hdf5/
 ├── .golangci.yml         # Linter configuration
 ├── cmd/                  # Command-line utilities
 ├── docs/                 # Documentation
-├── examples/             # Usage examples
 ├── internal/             # Internal implementation
 │   ├── core/            # Core HDF5 structures
 │   ├── structures/      # HDF5 data structures

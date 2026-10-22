@@ -286,22 +286,6 @@ linters:
           - nestif       # Nested group traversal
           - gocognit     # Complex group processing
 
-      # Examples - demonstration code can be verbose
-      # Multiple main() functions in examples/ is expected (each is standalone)
-      - path: examples/.*\.go
-        linters:
-          - errcheck     # Examples may skip error handling for clarity
-          - errorlint    # Examples may use %v instead of %w
-          - funlen       # Example functions can be longer
-          - gocyclo      # Example complexity acceptable
-          - cyclop       # Example complexity acceptable
-          - gocognit     # Example complexity acceptable
-          - typecheck    # Skip typecheck for examples (multiple main)
-          - godot        # Example comments don't need periods
-          - revive       # Examples don't need full documentation
-          - gosec        # Examples may have security warnings
-          - gocritic     # Example patterns may differ
-
 issues:
   # Show all issues
   max-issues-per-linter: 0

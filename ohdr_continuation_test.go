@@ -2,7 +2,7 @@ package hdf5
 
 import (
 	"fmt"
-	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -168,20 +168,9 @@ func TestOHDR_IssueScenario(t *testing.T) {
 // TestOHDR_Continuation_H5dump verifies that h5dump can read files with OHDR
 // continuation chunks (if h5dump is available on the system).
 func TestOHDR_Continuation_H5dump(t *testing.T) {
-	// Check if h5dump is available.
-	h5dumpPaths := []string{
-		`C:\Program Files\HDF_Group\HDF5\1.14.6\bin\h5dump.exe`,
-	}
-
-	var h5dump string
-	for _, p := range h5dumpPaths {
-		if _, err := os.Stat(p); err == nil {
-			h5dump = p
-			break
-		}
-	}
-	if h5dump == "" {
-		t.Skip("h5dump not found, skipping interop test")
+	h5dump, err := exec.LookPath("h5dump")
+	if err != nil {
+		t.Skip("h5dump not in PATH")
 	}
 
 	tmpDir := t.TempDir()

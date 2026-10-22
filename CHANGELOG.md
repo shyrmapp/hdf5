@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indexes and chunk B-tree v2 of any depth. Paged extensible-array data blocks
   remain unsupported (clear error).
 
+- **More hostile-input bounds:** hard-link diamonds no longer make `Open`
+  exponential (each group loads once), overlapping header continuations and
+  dense-heap records that share one block are capped at the file size, and
+  fractal heap doubling tables that would divide by zero are rejected. `Open`
+  closes the file if a loader panics.
+- **Compound datatypes v2-v5 are read** (member count from the class bit field,
+  v3+ offsets in the minimum width), integer members keep their signedness and
+  width, array and nested members decode, and `ReadCompound` checks the read
+  limit per row before allocating.
+
 ### Breaking
 
 - Requires Go 1.27.
@@ -98,6 +108,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values were previously returned as wrongly-signed `int32`/`int64`.
 - A file whose child objects cannot be loaded now fails to open or list
   instead of silently omitting them.
+- `ReadCompound` integer members are `int8`..`int64` / `uint8`..`uint64` by
+  their stored width and sign (were always `int32`/`int64`), array members are
+  `[]interface{}`, and nested compounds are `core.CompoundValue`.
+- `Walk` visits a group reachable through several hard links under every name
+  but descends into its children only once.
+
+### Removed
+
+- `examples/`: the programs had rotted (three exited with errors). Runnable
+  examples now live in `example_test.go`, are checked by `go test`, and show on
+  pkg.go.dev.
 - Files with dense attribute storage written by earlier versions of this
   library are no longer readable by this version (the Attribute Info message
   type, heap layout and index record layout changed to match the file format).

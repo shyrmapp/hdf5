@@ -61,8 +61,8 @@ jobs:
     - name: Install HDF5 tools
       run: sudo apt-get update && sudo apt-get install -y hdf5-tools
 
-    - name: Run C interop tests
-      run: go test -v -run TestCInterop .
+    - name: Run tests with the HDF5 C tools on PATH
+      run: go test ./...  # every test that looks up h5dump runs here, against Ubuntu's HDF5 1.10
 
   # Short fuzz pass over the untrusted-input read surface
   fuzz:
