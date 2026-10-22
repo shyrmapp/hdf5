@@ -1,6 +1,7 @@
 package hdf5
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -61,4 +62,39 @@ func TestStaleWriterAfterDelete(t *testing.T) {
 
 	out := h5dumpClean(t, file)
 	require.Contains(t, out, "(0): 7, 7, 7, 7")
+}
+
+func TestDuplicateAndInvalidNames(t *testing.T) {
+	fw, file := newWriteFile(t)
+	_, err := fw.CreateDataset("/dup", Int32, []uint64{1})
+	require.NoError(t, err)
+	_, err = fw.CreateDataset("/dup", Int32, []uint64{1})
+	require.ErrorContains(t, err, "already exists")
+
+	g, err := fw.CreateGroup("/g")
+	require.NoError(t, err)
+	require.NoError(t, g.WriteAttribute("a", int32(1)))
+	child, err := fw.CreateDataset("/g/child", Int32, []uint64{1})
+	require.NoError(t, err)
+	require.NoError(t, child.Write([]int32{5}))
+	_, err = fw.CreateGroup("/g")
+	require.ErrorContains(t, err, "already exists")
+	_, err = fw.CreateDataset("/g/child2", Int32, []uint64{1}) // /g must still be intact
+	require.NoError(t, err)
+
+	_, err = fw.CreateDataset("/dup", Int32, []uint64{1})
+	require.Error(t, err)
+	_, err = fw.CreateDataset("/", Int32, []uint64{1})
+	require.Error(t, err)
+	_, err = fw.CreateDataset("/trail/", Int32, []uint64{1})
+	require.Error(t, err)
+	_, err = fw.CreateGroup("/trailg/")
+	require.Error(t, err)
+	require.Error(t, fw.CreateSoftLink("/dup", "/g"))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, `DATASET "child"`)
+	require.Contains(t, out, `DATASET "child2"`)
+	require.Equal(t, 1, strings.Count(out, `DATASET "dup"`))
 }

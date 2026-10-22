@@ -137,6 +137,15 @@ func validateGroupPath(path string) error {
 	if path == "/" {
 		return fmt.Errorf("root group already exists")
 	}
+	return validateObjectPath(path)
+}
+
+// validateObjectPath rejects paths whose last component is empty ("/a/",
+// "/a//b") — they would silently create an empty-named or trimmed child.
+func validateObjectPath(path string) error {
+	if strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+		return fmt.Errorf("invalid path %q: empty path component", path)
+	}
 	return nil
 }
 
@@ -275,6 +284,11 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		return nil, fmt.Errorf("header size mismatch: expected %d, wrote %d", headerSize, writtenSize)
 	}
 
+	// Link to parent group (rejects duplicate names before anything is registered).
+	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
+		return nil, fmt.Errorf("failed to link to parent: %w", err)
+	}
+
 	// Store group metadata for nested dataset linking
 	fw.groups[path] = &GroupMetadata{
 		heapAddr:      heapAddr,
@@ -282,11 +296,6 @@ func (fw *FileWriter) CreateGroup(path string) (*GroupWriter, error) {
 		btreeAddr:     btreeAddr,
 		headerAddr:    headerAddr,
 		headerAllocSz: headerSize,
-	}
-
-	// Link to parent group
-	if err := fw.linkToParent(parent, name, headerAddr); err != nil {
-		return nil, fmt.Errorf("failed to link to parent: %w", err)
 	}
 
 	// Return GroupWriter handle
@@ -386,6 +395,12 @@ func (fw *FileWriter) linkEntryToParent(parentPath, childName string, childAddr 
 	heap, err := fw.readLocalHeap(heapAddr)
 	if err != nil {
 		return fmt.Errorf("read local heap: %w", err)
+	}
+
+	for _, e := range allEntries {
+		if n, nameErr := heap.GetString(e.LinkNameOffset); nameErr == nil && n == childName {
+			return fmt.Errorf("%q already exists in group %q", childName, parentPath)
+		}
 	}
 
 	// Step 2: Add child name to heap. If full, expand.

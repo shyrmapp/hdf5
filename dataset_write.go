@@ -826,7 +826,7 @@ func validateDatasetName(name string) error {
 	if name[0] != '/' {
 		return fmt.Errorf("dataset name must start with '/' (got %q)", name)
 	}
-	return nil
+	return validateObjectPath(name)
 }
 
 // validateDimensions validates that dimensions is not empty and no dimension is zero.

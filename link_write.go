@@ -116,6 +116,9 @@ func validateLinkPath(path string) error {
 	if path == "/" {
 		return fmt.Errorf("cannot create link to root group")
 	}
+	if strings.HasSuffix(path, "/") {
+		return fmt.Errorf("path cannot end with '/' (got %q)", path)
+	}
 	if strings.Contains(path, "//") {
 		return fmt.Errorf("path cannot contain consecutive slashes (got %q)", path)
 	}
