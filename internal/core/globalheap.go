@@ -85,6 +85,10 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		return nil, fmt.Errorf("invalid collection size: %d (too small)", collectionSize)
 	}
 
+	if collectionSize > maxMetadataBlock || collectionSize > blockLimit(r, address) {
+		return nil, fmt.Errorf("global heap collection size %d exceeds file or limit", collectionSize)
+	}
+
 	// Read entire collection into memory for easier parsing.
 	collectionData := make([]byte, collectionSize)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
@@ -127,28 +131,28 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 
 		// Object ID 0 is the free space object, skip it.
 		if objID == 0 {
-			// Free space - just advance.
-			offset += objHeaderSize
-			// Align object size to 8 bytes.
-			alignedSize := objSize
-			if alignedSize%8 != 0 {
-				alignedSize += 8 - (alignedSize % 8)
+			// Free space - nothing follows it that we can parse once it
+			// claims more than the collection holds.
+			remaining := uint64(len(collectionData) - offset - objHeaderSize)
+			if objSize > remaining {
+				break
 			}
-			//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
-			offset += int(alignedSize)
+			//nolint:gosec // G115: objSize <= remaining <= len(collectionData)
+			offset += objHeaderSize + int(objSize)
+			offset = (offset + 7) &^ 7
 			continue
 		}
 
 		// Read object data.
 		dataStart := offset + objHeaderSize
-		//nolint:gosec // G115: Safe conversion for HDF5 object sizes
-		if dataStart+int(objSize) > len(collectionData) {
+		if objSize > uint64(len(collectionData)-dataStart) {
 			return nil, fmt.Errorf("object %d data extends beyond collection", objID)
 		}
+		//nolint:gosec // G115: objSize <= len(collectionData)
+		objEnd := dataStart + int(objSize)
 
 		objData := make([]byte, objSize)
-		//nolint:gosec // G115: Safe conversion for HDF5 object sizes
-		copy(objData, collectionData[dataStart:dataStart+int(objSize)])
+		copy(objData, collectionData[dataStart:objEnd])
 
 		obj := GlobalHeapObject{
 			Index: int(objID),
@@ -160,12 +164,7 @@ func ReadGlobalHeapCollection(r io.ReaderAt, address uint64, offsetSize int) (*G
 		collection.Objects = append(collection.Objects, obj)
 
 		// Advance to next object (data is aligned to 8-byte boundary).
-		alignedSize := objSize
-		if alignedSize%8 != 0 {
-			alignedSize += 8 - (alignedSize % 8)
-		}
-		//nolint:gosec // G115: Safe conversion for HDF5 structure sizes
-		offset += objHeaderSize + int(alignedSize)
+		offset = (objEnd + 7) &^ 7
 	}
 
 	return collection, nil
