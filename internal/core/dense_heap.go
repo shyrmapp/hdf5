@@ -184,6 +184,16 @@ type fractalHeap struct {
 	offBytes   int // heap offset width in IDs and block headers
 	lenBytes   int // object length width in managed IDs
 	blocks     map[uint64][]byte
+	blockBytes uint64 // summed size of cached direct blocks, capped at the file size
+}
+
+// validDoublingTable requires powers of two within bounds that keep
+// width*startBlock and the row shifts from overflowing (a wrapped product is a
+// zero divisor).
+func validDoublingTable(width, startBlock, maxDirect uint64) bool {
+	pow2 := func(v uint64) bool { return v != 0 && v&(v-1) == 0 }
+	return pow2(width) && width <= 1<<16 && pow2(startBlock) && startBlock <= 1<<32 &&
+		pow2(maxDirect) && maxDirect >= startBlock && maxDirect <= 1<<32
 }
 
 func openFractalHeap(r io.ReaderAt, addr uint64, sb *Superblock) (*fractalHeap, error) {
@@ -220,8 +230,7 @@ func openFractalHeap(r io.ReaderAt, addr uint64, sb *Superblock) (*fractalHeap, 
 	p += off
 	h.curRows = uint64(e.Uint16(buf[p:]))
 
-	if h.width == 0 || h.startBlock == 0 || h.startBlock&(h.startBlock-1) != 0 ||
-		h.maxDirect < h.startBlock || h.maxDirect&(h.maxDirect-1) != 0 || maxHeapBits == 0 || maxHeapBits > 64 {
+	if !validDoublingTable(h.width, h.startBlock, h.maxDirect) || maxHeapBits == 0 || maxHeapBits > 64 {
 		return nil, errors.New("invalid fractal heap doubling table")
 	}
 	h.offBytes = (maxHeapBits + 7) / 8
@@ -318,6 +327,10 @@ func (h *fractalHeap) indirect(addr, nrows, base, off, length uint64, level int)
 	if row >= nrows {
 		return nil, fmt.Errorf("heap offset 0x%X outside indirect block at 0x%X", off, addr)
 	}
+	// width*startBlock<<(row-1) must stay below 2^63 so bs and rowStart cannot wrap to 0.
+	if row > 1 && bits.Len64(h.width*h.startBlock)+int(row)-1 > 63 {
+		return nil, fmt.Errorf("heap offset 0x%X outside the heap's address space", off)
+	}
 	bs := h.blockSize(row)
 	col := (rel - h.rowStart(row)) / bs
 	o := uint64(h.sb.OffsetSize)
@@ -351,6 +364,11 @@ func (h *fractalHeap) directBlock(addr, size uint64) ([]byte, error) {
 	if size > blockLimit(h.r, addr) {
 		return nil, fmt.Errorf("direct block at 0x%X of %d bytes exceeds file", addr, size)
 	}
+	// Overlapping blocks at distinct addresses must not multiply the file size.
+	if total, ok := readerSize(h.r); ok && h.blockBytes+size > total {
+		return nil, fmt.Errorf("fractal heap direct blocks exceed file size %d", total)
+	}
+	h.blockBytes += size
 	b, err := readFull(h.r, addr, int(size)) //nolint:gosec // G115: bounded above
 	if err != nil {
 		return nil, err
@@ -383,7 +401,8 @@ func (h *fractalHeap) direct(addr, size, blockOff, off, length uint64) ([]byte, 
 		return nil, err
 	}
 	rel := off - blockOff
-	return append([]byte(nil), b[rel:rel+length]...), nil
+	// Slice the cached block rather than copy: many records may share one block.
+	return b[rel : rel+length : rel+length], nil
 }
 
 // ReadDenseHeapObjects walks the v2 B-tree at btreeAddr and returns the raw
@@ -406,10 +425,18 @@ func ReadDenseHeapObjects(r io.ReaderAt, btreeAddr, heapAddr uint64, sb *Superbl
 		return nil, fmt.Errorf("fractal heap header: %w", err)
 	}
 	out := make([][]byte, 0, len(ids))
+	// Records may all point at one block; the objects of a sane heap are
+	// disjoint, so their total cannot exceed the file.
+	var total uint64
+	fileSize, sized := readerSize(r)
 	for i, id := range ids {
 		data, err := heap.object(id)
 		if err != nil {
 			return nil, fmt.Errorf("heap object %d: %w", i, err)
+		}
+		total += uint64(len(data))
+		if sized && total > fileSize {
+			return nil, fmt.Errorf("heap objects total %d bytes, exceeding file size %d", total, fileSize)
 		}
 		out = append(out, data)
 	}
