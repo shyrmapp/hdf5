@@ -80,7 +80,7 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, m
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +98,7 @@ func ReadDatasetVLenBytes(r io.ReaderAt, header *ObjectHeader, sb *Superblock, m
 			}
 		}
 
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read chunked data: %w", err)
 		}

@@ -95,7 +95,8 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 
 	// Validate bounds (start + count must not exceed dataset dimensions)
 	for i := range start {
-		if start[i]+count[i] > dataspace.Dimensions[i] {
+		// Overflow-safe form of start+count > dim.
+		if start[i] > dataspace.Dimensions[i] || count[i] > dataspace.Dimensions[i]-start[i] {
 			return nil, fmt.Errorf("selection out of bounds in dimension %d: start=%d + count=%d > size=%d",
 				i, start[i], count[i], dataspace.Dimensions[i])
 		}
@@ -261,8 +262,11 @@ func validateDimensionBounds(sel *HyperslabSelection, dims []uint64, dim int) er
 	}
 
 	// Check bounds: start + (count-1)*stride + block must not exceed dimension
-	lastCoord := sel.Start[dim] + (sel.Count[dim]-1)*sel.Stride[dim] + sel.Block[dim]
-	if lastCoord > dims[dim] {
+	// (ValidateHyperslabBounds already proved start+(count-1)*stride < dim, so
+	// only the block addition can still overflow.)
+	last := sel.Start[dim] + (sel.Count[dim]-1)*sel.Stride[dim]
+	lastCoord := last + sel.Block[dim]
+	if sel.Block[dim] > dims[dim]-last {
 		return fmt.Errorf("selection out of bounds in dimension %d: "+
 			"start=%d + (count-1)*stride + block = %d > size=%d",
 			dim, sel.Start[dim], lastCoord, dims[dim])
@@ -284,6 +288,20 @@ func (d *Dataset) readHyperslab(selection *HyperslabSelection, header *core.Obje
 		return nil, err
 	}
 
+	// Bound the output before any allocation: the converted float64 result
+	// and the raw bytes must both fit the read limit.
+	n, err := checkedSelectionElements(selection)
+	if err != nil {
+		return nil, err
+	}
+	if err := core.CheckReadSize(n, 8, d.file.maxReadBytes, "selection"); err != nil {
+		return nil, err
+	}
+	if err := core.CheckReadSize(n, uint64(parsedMsgs.datatype.Size), d.file.maxReadBytes, "selection"); err != nil {
+		return nil, err
+	}
+	parsedMsgs.fill = core.FillValueBytes(header, parsedMsgs.datatype.Size)
+
 	// Dispatch to appropriate layout reader
 	return d.dispatchHyperslabReader(selection, parsedMsgs)
 }
@@ -302,6 +320,7 @@ type parsedHyperslabMessages struct {
 	dataspace      *core.DataspaceMessage
 	layout         *core.DataLayoutMessage
 	filterPipeline *core.FilterPipelineMessage
+	fill           []byte // one element's fill value; nil = zeros
 }
 
 // extractHyperslabMessages extracts required messages from object header.
@@ -376,12 +395,28 @@ func (d *Dataset) dispatchHyperslabReader(
 	case msgs.layout.IsCompact():
 		return d.readHyperslabCompact(selection, msgs.datatype, msgs.dataspace, msgs.layout)
 	case msgs.layout.IsContiguous():
-		return d.readHyperslabContiguous(selection, msgs.datatype, msgs.dataspace, msgs.layout)
+		return d.readHyperslabContiguous(selection, msgs.datatype, msgs.dataspace, msgs.layout, msgs.fill)
 	case msgs.layout.IsChunked():
-		return d.readHyperslabChunked(selection, msgs.datatype, msgs.dataspace, msgs.layout, msgs.filterPipeline)
+		return d.readHyperslabChunked(selection, msgs.datatype, msgs.dataspace, msgs.layout, msgs.filterPipeline, msgs.fill)
 	default:
 		return nil, fmt.Errorf("unsupported layout class: %d", msgs.layout.Class)
 	}
+}
+
+// checkedSelectionElements is the element count of a selection,
+// product(Count[i]*Block[i]), erroring on uint64 overflow.
+func checkedSelectionElements(sel *HyperslabSelection) (uint64, error) {
+	total := uint64(1)
+	for i := range sel.Count {
+		span, err := utils.SafeMultiply(sel.Count[i], sel.Block[i])
+		if err != nil {
+			return 0, fmt.Errorf("selection too large: %w", err)
+		}
+		if total, err = utils.SafeMultiply(total, span); err != nil {
+			return 0, fmt.Errorf("selection too large: %w", err)
+		}
+	}
+	return total, nil
 }
 
 // calculateHyperslabOutputSize calculates the total number of elements in the hyperslab selection.
@@ -416,226 +451,6 @@ func (d *Dataset) readHyperslabCompact(
 	return extractHyperslabFromRawData(selection, datatype, dataspace, layout.CompactData, d.file.maxReadBytes)
 }
 
-// readHyperslabContiguous reads hyperslab from contiguous layout dataset.
-// Contiguous layout stores data in one continuous block in the file.
-//
-// OPTIMIZED: Reads ONLY the bytes needed for the selection, not the entire dataset.
-// For N-dimensional data with row-major order, we read only the rows/slices that contain selected data.
-func (d *Dataset) readHyperslabContiguous(
-	selection *HyperslabSelection,
-	datatype *core.DatatypeMessage,
-	dataspace *core.DataspaceMessage,
-	layout *core.DataLayoutMessage,
-) (interface{}, error) {
-	ndims := len(dataspace.Dimensions)
-
-	// For 1D or simple contiguous selections, optimize by reading minimal data
-	if ndims == 1 || isContiguousSelection(selection, dataspace.Dimensions) {
-		return d.readContiguousOptimized(selection, datatype, dataspace, layout)
-	}
-
-	// For complex multi-dimensional selections with stride/block, use row-by-row reading
-	return d.readContiguousRowByRow(selection, datatype, dataspace, layout)
-}
-
-// isContiguousSelection checks if selection is contiguous in memory (last dimension fully selected).
-func isContiguousSelection(sel *HyperslabSelection, dims []uint64) bool {
-	if len(dims) == 0 {
-		return true
-	}
-
-	// Check if last dimension is contiguous (stride=1, block=1, covers full range or starts at 0)
-	lastDim := len(dims) - 1
-	if sel.Stride[lastDim] != 1 || sel.Block[lastDim] != 1 {
-		return false
-	}
-
-	// If selecting entire last dimension, it's contiguous
-	if sel.Count[lastDim]*sel.Block[lastDim] == dims[lastDim] {
-		return true
-	}
-
-	return false
-}
-
-// readContiguousOptimized reads contiguous selections efficiently in one or few I/O operations.
-func (d *Dataset) readContiguousOptimized(
-	selection *HyperslabSelection,
-	datatype *core.DatatypeMessage,
-	dataspace *core.DataspaceMessage,
-	layout *core.DataLayoutMessage,
-) (interface{}, error) {
-	elementSize := uint64(datatype.Size)
-	dims := dataspace.Dimensions
-
-	// Calculate output size
-	outputElements := calculateHyperslabOutputSize(selection)
-	if outputElements == 0 {
-		return []float64{}, nil
-	}
-
-	// For 1D or fully contiguous, read in one operation
-	if len(dims) == 1 {
-		// 1D case: single contiguous read
-		startOffset := selection.Start[0] * elementSize
-		byteCount := outputElements * elementSize
-
-		rawData := make([]byte, byteCount)
-		fileOffset := layout.DataAddress + startOffset
-
-		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read 1D contiguous data: %w", err)
-		}
-
-		return core.ConvertToFloat64(rawData, datatype, outputElements, d.file.maxReadBytes)
-	}
-
-	// Multi-dimensional contiguous case
-	// Read row-major contiguous block
-	// Calculate start offset for first element
-	startCoords := selection.Start
-	startLinearOffset := calculateLinearOffset(startCoords, dims)
-	startByteOffset := startLinearOffset * elementSize
-
-	// For contiguous multi-D, we can read the bounding box
-	outputData := make([]byte, outputElements*elementSize)
-	fileOffset := layout.DataAddress + startByteOffset
-
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(outputData, int64(fileOffset))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read contiguous data: %w", err)
-	}
-
-	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
-}
-
-// readContiguousRowByRow reads selections row-by-row for non-contiguous patterns.
-// This handles stride/block selections efficiently by reading only necessary rows.
-func (d *Dataset) readContiguousRowByRow(
-	selection *HyperslabSelection,
-	datatype *core.DatatypeMessage,
-	dataspace *core.DataspaceMessage,
-	layout *core.DataLayoutMessage,
-) (interface{}, error) {
-	elementSize := uint64(datatype.Size)
-	dims := dataspace.Dimensions
-	ndims := len(dims)
-
-	// Calculate output size
-	outputElements := calculateHyperslabOutputSize(selection)
-	if outputElements == 0 {
-		return []float64{}, nil
-	}
-
-	outputData := make([]byte, outputElements*elementSize)
-	outputIdx := uint64(0)
-
-	// For 2D, optimize by reading rows
-	if ndims == 2 {
-		return d.readContiguous2DOptimized(selection, datatype, dataspace, layout)
-	}
-
-	// For 3D+, use recursive extraction with targeted reads
-	// Read minimal bounding box that contains all selected elements
-	minCoords := make([]uint64, ndims)
-	maxCoords := make([]uint64, ndims)
-
-	for i := 0; i < ndims; i++ {
-		minCoords[i] = selection.Start[i]
-		maxCoords[i] = selection.Start[i] + (selection.Count[i]-1)*selection.Stride[i] + selection.Block[i]
-	}
-
-	// Calculate bounding box size
-	boundingElements := uint64(1)
-	for i := 0; i < ndims; i++ {
-		boundingElements *= (maxCoords[i] - minCoords[i])
-	}
-
-	// Read bounding box
-	rawData := make([]byte, boundingElements*elementSize)
-	startOffset := calculateLinearOffset(minCoords, dims) * elementSize
-	fileOffset := layout.DataAddress + startOffset
-
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(rawData, int64(fileOffset))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read bounding box: %w", err)
-	}
-
-	// Extract selection from bounding box
-	coords := make([]uint64, ndims)
-	copy(coords, selection.Start)
-
-	extractHyperslabRecursive(
-		rawData, outputData,
-		dims, selection,
-		coords, 0,
-		elementSize, &outputIdx,
-	)
-
-	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
-}
-
-// readContiguous2DOptimized handles 2D contiguous datasets with row-by-row reading.
-//
-//nolint:gocognit // Complex algorithm for efficient 2D hyperslab reading
-func (d *Dataset) readContiguous2DOptimized(
-	selection *HyperslabSelection,
-	datatype *core.DatatypeMessage,
-	dataspace *core.DataspaceMessage,
-	layout *core.DataLayoutMessage,
-) (interface{}, error) {
-	elementSize := uint64(datatype.Size)
-	dims := dataspace.Dimensions
-
-	outputElements := calculateHyperslabOutputSize(selection)
-	outputData := make([]byte, outputElements*elementSize)
-	outputIdx := uint64(0)
-
-	// Iterate through selected rows
-	for iCount := uint64(0); iCount < selection.Count[0]; iCount++ {
-		for iBlock := uint64(0); iBlock < selection.Block[0]; iBlock++ {
-			row := selection.Start[0] + iCount*selection.Stride[0] + iBlock
-
-			if row >= dims[0] {
-				continue // Skip out of bounds
-			}
-
-			// For this row, read the selected columns
-			for jCount := uint64(0); jCount < selection.Count[1]; jCount++ {
-				for jBlock := uint64(0); jBlock < selection.Block[1]; jBlock++ {
-					col := selection.Start[1] + jCount*selection.Stride[1] + jBlock
-
-					if col >= dims[1] {
-						continue // Skip out of bounds
-					}
-
-					// Calculate file offset for this element
-					linearOffset := row*dims[1] + col
-					byteOffset := layout.DataAddress + linearOffset*elementSize
-
-					// Read single element
-					//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-					_, err := d.file.osFile.ReadAt(
-						outputData[outputIdx*elementSize:(outputIdx+1)*elementSize],
-						int64(byteOffset),
-					)
-					if err != nil {
-						return nil, fmt.Errorf("failed to read element at [%d,%d]: %w", row, col, err)
-					}
-
-					outputIdx++
-				}
-			}
-		}
-	}
-
-	return core.ConvertToFloat64(outputData, datatype, outputElements, d.file.maxReadBytes)
-}
-
 // readHyperslabChunked reads hyperslab from chunked layout dataset.
 // Chunked layout stores data in separate chunks indexed by a B-tree.
 //
@@ -647,6 +462,7 @@ func (d *Dataset) readHyperslabChunked(
 	dataspace *core.DataspaceMessage,
 	layout *core.DataLayoutMessage,
 	filterPipeline *core.FilterPipelineMessage,
+	fill []byte,
 ) (interface{}, error) {
 	elementSize := uint64(datatype.Size)
 	dims := dataspace.Dimensions
@@ -686,6 +502,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Allocate output buffer
 	outputData := make([]byte, outputElements*elementSize)
+	core.FillBuffer(outputData, fill) // chunks never written read as the fill value
 
 	// Read each overlapping chunk and extract relevant data. Each element
 	// is placed at the output offset computed from its coordinates (see
@@ -811,13 +628,15 @@ func (d *Dataset) extractFromChunk(
 	key := chunkCoordsToKey(chunkCoord)
 	chunkInfo, exists := chunkIndex[key]
 	if !exists {
-		// Chunk doesn't exist (sparse dataset) - skip
-		// In HDF5, missing chunks are filled with fill values (typically 0)
-		// For now, we leave output buffer as-is (initialized to 0)
+		// Sparse chunk: the caller pre-filled the output with the fill value.
 		return nil
 	}
 
 	elementSize := uint64(datatype.Size)
+
+	if err := utils.ValidateBufferSize(chunkInfo.nbytes, utils.MaxChunkSize, "chunk data"); err != nil {
+		return fmt.Errorf("invalid chunk size: %w", err)
+	}
 
 	// Read chunk data (use nbytes from index)
 	chunkData := make([]byte, chunkInfo.nbytes)

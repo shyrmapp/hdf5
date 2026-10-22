@@ -144,14 +144,14 @@ func readDatasetRaw(r io.ReaderAt, header *ObjectHeader, sb *Superblock, maxByte
 		rawData = layout.CompactData
 
 	case layout.IsContiguous():
-		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes)
+		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, nil, 0, err
 		}
 
 	case layout.IsChunked():
 		// Data is stored in chunks indexed by B-tree.
-		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes)
+		rawData, err = readChunkedData(r, layout, dataspace, datatype, sb, filterPipeline, maxBytes, FillValueBytes(header, datatype.Size))
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("failed to read chunked data: %w", err)
 		}
@@ -354,7 +354,7 @@ func (di *DatasetInfo) String() string {
 }
 
 // readChunkedData reads data from chunked layout.
-func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, datatype *DatatypeMessage, sb *Superblock, filterPipeline *FilterPipelineMessage, maxBytes uint64) ([]byte, error) {
+func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, datatype *DatatypeMessage, sb *Superblock, filterPipeline *FilterPipelineMessage, maxBytes uint64, fill []byte) ([]byte, error) {
 	// Calculate total data size.
 	totalElements := dataspace.TotalElements()
 	elementSize := uint64(datatype.Size)
@@ -373,6 +373,7 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 
 	// Allocate output buffer.
 	rawData := make([]byte, totalBytes)
+	fillBuffer(rawData, fill) // chunks never written read as the fill value
 
 	// Collect the chunk list from whichever chunk index the layout uses:
 	// layout v3 files index chunks with a v1 B-tree; layout v4/v5 files
@@ -437,6 +438,10 @@ func readChunkedData(r io.ReaderAt, layout *DataLayoutMessage, dataspace *Datasp
 func CollectChunks(r io.ReaderAt, layout *DataLayoutMessage, dataspace *DataspaceMessage, sb *Superblock) ([]ChunkLocation, error) {
 	if layout.Version >= 4 {
 		return CollectChunksV4(r, layout, dataspace, sb)
+	}
+
+	if isUndefinedAddress(layout.DataAddress, sb.OffsetSize) {
+		return nil, nil // index never allocated: no chunks written
 	}
 
 	// Layout v3: chunk index is a v1 B-tree. Note: chunk dimensions include
@@ -625,7 +630,7 @@ func float16ToFloat64(bits uint16) float64 {
 //
 // No arbitrary ceiling is imposed: a genuinely large dataset in a genuinely
 // large file still reads.
-func readContiguousData(r io.ReaderAt, addr, totalElements, elementSize, maxBytes uint64) ([]byte, error) {
+func readContiguousData(r io.ReaderAt, addr, totalElements, elementSize, maxBytes uint64, offsetSize uint8, fill []byte) ([]byte, error) {
 	if err := checkReadSize(totalElements, elementSize, maxBytes, "dataset"); err != nil {
 		return nil, err
 	}
@@ -635,6 +640,13 @@ func readContiguousData(r io.ReaderAt, addr, totalElements, elementSize, maxByte
 	}
 	if totalBytes == 0 {
 		return nil, nil
+	}
+
+	// Storage never allocated: every element is the fill value.
+	if isUndefinedAddress(addr, offsetSize) {
+		rawData := make([]byte, totalBytes)
+		fillBuffer(rawData, fill)
+		return rawData, nil
 	}
 
 	// Probe the final byte. os.File.ReadAt reports io.EOF past end of file.
