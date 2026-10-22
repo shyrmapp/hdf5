@@ -16,17 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position. `OpenForWrite` refuses such files. Five previously skipped files
   of the official test suite now pass (385/387).
 
-### Breaking
+### Fixed
 
-- **Write path now rejects names it used to accept.** Creating a second child
-  with an existing name, `CreateDataset("/")`, and paths with a trailing slash
-  or empty component (`"/a/"`, `"/a//b"`) return an error; before, they
-  produced duplicate links, an orphaned group or an empty-named child.
-  A `DatasetWriter` from `OpenDataset` only writes data to contiguous
-  datasets with allocated storage, and any writer errors after `Close` or
-  after its object was deleted (it used to panic or overwrite reused space).
-
-### Fixed (write path)
+Write path:
 
 - A group with more than 256 children returns an error instead of silently
   corrupting the file (the v0 group B-tree is a single K=16 node).
@@ -51,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (an external link needs a link-message group, not a symbol table entry).
 - `FileWriter` is documented as not safe for concurrent use.
 
-### Fixed
+Read path:
 
 - **Hostile chunked and compact datasets are refused instead of panicking or
   over-allocating.** Chunk dimensions are validated once (one per dataspace
@@ -134,6 +126,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit per row before allocating.
 
 ### Breaking
+
+- **Write path now rejects names it used to accept.** Creating a second child
+  with an existing name, `CreateDataset("/")`, and paths with a trailing slash
+  or empty component (`"/a/"`, `"/a//b"`) return an error; before, they
+  produced duplicate links, an orphaned group or an empty-named child.
+  A `DatasetWriter` from `OpenDataset` only writes data to contiguous
+  datasets with allocated storage, and any writer errors after `Close` or
+  after its object was deleted (it used to panic or overwrite reused space).
 
 - Requires Go 1.27.
 - `File.Reader()` returns an `io.SectionReader` shifted by the base address,
