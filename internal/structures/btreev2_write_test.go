@@ -105,9 +105,6 @@ func TestBTreeV2_DeleteRecord(t *testing.T) {
 	require.Equal(t, 2, len(bt.records))
 	require.Equal(t, uint64(2), bt.header.TotalRecords)
 	require.Equal(t, uint16(2), bt.header.NumRecordsRoot)
-	require.False(t, bt.HasKey("beta"))
-	require.True(t, bt.HasKey("alpha"))
-	require.True(t, bt.HasKey("gamma"))
 
 	// Leaf records must stay in sync with the in-memory slice
 	require.Equal(t, bt.records, bt.leaf.Records)

@@ -1,8 +1,5 @@
 package structures
 
-// SymbolTableSignature is the 4-byte signature for symbol table nodes.
-const SymbolTableSignature = "SNOD"
-
 // SymbolTable represents an HDF5 symbol table node for legacy group storage.
 type SymbolTable struct {
 	Version      uint8

@@ -49,7 +49,6 @@ const (
 var (
 	ErrBTreeNodeFull    = errors.New("b-tree node is full")
 	ErrInvalidBTreeType = errors.New("invalid b-tree type")
-	ErrInvalidNodeSize  = errors.New("invalid node size")
 )
 
 // BTreeV2Header represents B-tree v2 header structure.
@@ -227,28 +226,6 @@ func (bt *WritableBTreeV2) InsertRecord(linkName string, heapID uint64) error {
 	bt.leaf.Records = bt.records
 
 	return nil
-}
-
-// HasKey checks if a key (link/attribute name) exists in the B-tree.
-//
-// Parameters:
-//   - name: name to check
-//
-// Returns:
-//   - bool: true if name exists (hash found), false otherwise
-//
-// Searches the single leaf node by name hash.
-func (bt *WritableBTreeV2) HasKey(name string) bool {
-	hash := jenkinsHash(name)
-
-	// Search in records
-	for _, record := range bt.records {
-		if record.NameHash == hash {
-			return true
-		}
-	}
-
-	return false
 }
 
 // SearchRecord searches for a record by name and returns the heap ID.
@@ -915,15 +892,6 @@ func readUint64(buf []byte, size int, endianness binary.ByteOrder) uint64 {
 	default:
 		return 0
 	}
-}
-
-// GetRecords returns the current list of records in the B-tree.
-// This is a read-only accessor for the records slice.
-//
-// Returns:
-//   - []LinkNameRecord: slice of all link name records in the B-tree
-func (bt *WritableBTreeV2) GetRecords() []LinkNameRecord {
-	return bt.records
 }
 
 // jenkinsHash computes Jenkins hash (lookup3) for a string.

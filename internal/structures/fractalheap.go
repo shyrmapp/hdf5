@@ -96,10 +96,6 @@ type HeapIDType uint8
 const (
 	// HeapIDTypeManaged - Managed object stored in fractal heap blocks.
 	HeapIDTypeManaged HeapIDType = 0x00
-	// HeapIDTypeHuge - Huge object stored in file directly.
-	HeapIDTypeHuge HeapIDType = 0x10
-	// HeapIDTypeTiny - Tiny object stored in heap ID directly.
-	HeapIDTypeTiny HeapIDType = 0x20
 )
 
 // DirectBlock represents a fractal heap direct block.
