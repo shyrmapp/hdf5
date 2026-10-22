@@ -2,7 +2,7 @@ package hdf5_test
 
 import (
 	"fmt"
-	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -450,9 +450,9 @@ func TestDelete_DatasetWithAttributes(t *testing.T) {
 
 // TestDelete_H5dump validates the created file with h5dump if available.
 func TestDelete_H5dump(t *testing.T) {
-	h5dumpPath := `C:\Program Files\HDF_Group\HDF5\1.14.6\bin\h5dump.exe`
-	if _, err := os.Stat(h5dumpPath); os.IsNotExist(err) {
-		t.Skip("h5dump not available")
+	h5dumpPath, err := exec.LookPath("h5dump")
+	if err != nil {
+		t.Skip("h5dump not in PATH")
 	}
 
 	dir := t.TempDir()
@@ -474,9 +474,11 @@ func TestDelete_H5dump(t *testing.T) {
 
 	require.NoError(t, fw.Close())
 
-	// h5dump validation would go here if we had exec capability.
-	// For CI this is covered by the existing h5dump validation in the test suite.
-	// The file is created and should be readable by h5dump.
+	out, err := exec.Command(h5dumpPath, file).CombinedOutput()
+	require.NoError(t, err, string(out))
+	require.Contains(t, string(out), `DATASET "keep"`)
+	require.Contains(t, string(out), "(0): 1, 2, 3")
+	require.NotContains(t, string(out), `"remove"`)
 }
 
 // TestDelete_HardLink_RefCountUpdate deletes one name of a hard-linked

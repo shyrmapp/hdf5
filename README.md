@@ -47,7 +47,7 @@ func main() {
 }
 ```
 
-[More examples →](examples/)
+[More examples on pkg.go.dev →](https://pkg.go.dev/github.com/shyrmapp/hdf5#pkg-examples) (from `example_test.go`, run by `go test`)
 
 ## Features
 
@@ -111,7 +111,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and known gaps.
 
 ## Documentation
 
-- [API Reference](https://pkg.go.dev/github.com/shyrmapp/hdf5) · [Examples](examples/)
+- [API Reference](https://pkg.go.dev/github.com/shyrmapp/hdf5)
 - [Architecture Overview](docs/architecture/OVERVIEW.md) — how the format is parsed
 
 ## Development
