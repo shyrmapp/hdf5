@@ -10,6 +10,7 @@ import (
 // LinkType and its constants are shared with the encoder in internal/core.
 type LinkType = core.LinkType
 
+// Link type constants.
 const (
 	LinkTypeHard     = core.LinkTypeHard
 	LinkTypeSoft     = core.LinkTypeSoft
