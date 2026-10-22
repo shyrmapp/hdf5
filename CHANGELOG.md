@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [v0.18.0] - 2026-10-22
+
 ### Added
 
 - **Files with a user block open.** The superblock is located at 0 or a power
