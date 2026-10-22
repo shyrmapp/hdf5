@@ -66,14 +66,14 @@ func main() {
 
 **Writing**
 
-- Datasets in all layouts, all supported datatypes including compounds and
+- Contiguous and chunked datasets, all supported datatypes including compounds and
   variable-length strings
 - Resizable datasets with unlimited dimensions
 - GZIP and LZF compression, Shuffle, Fletcher32
 - Groups, attributes (create/modify/delete), hard/soft/external links
 - Object deletion with space reclamation
 
-**Not supported**: SZIP write, SWMR, parallel I/O. Concurrent
+**Not supported**: compact-layout write, SZIP write, SWMR, parallel I/O. Concurrent
 access to the same `File` requires caller synchronization; separate `File`
 instances are independent. See [ROADMAP.md](ROADMAP.md).
 

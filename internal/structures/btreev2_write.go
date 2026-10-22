@@ -614,27 +614,6 @@ func insertRecordSorted(records []LinkNameRecord, newRecord LinkNameRecord) []Li
 	return records
 }
 
-// compareLinkNames compares two link names lexicographically.
-//
-// This matches HDF5's comparison in H5G__dense_btree2_name_compare().
-// HDF5 uses strcmp(), which performs UTF-8 lexicographic comparison.
-//
-// Returns:
-//   - -1 if a < b
-//   - 0 if a == b
-//   - 1 if a > b
-//
-// Reference: H5Gbtree2.c - H5G__dense_btree2_name_compare().
-func compareLinkNames(a, b string) int {
-	// Go's string comparison is UTF-8 lexicographic (same as strcmp)
-	if a < b {
-		return -1
-	} else if a > b {
-		return 1
-	}
-	return 0
-}
-
 // LoadFromFile loads an existing B-tree v2 from file.
 //
 // This implements read-modify-write (RMW) support:

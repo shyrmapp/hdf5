@@ -1,6 +1,9 @@
-// Package hdf5 provides a pure Go implementation for reading HDF5 files.
-// It supports HDF5 format versions 0, 2, and 3, with capabilities for
-// reading datasets, groups, attributes, and various data layouts.
+// Package hdf5 is a pure Go reader and writer for HDF5 files (superblock
+// versions 0, 2 and 3), covering datasets, groups, attributes and links.
+//
+// Open reads a file; whole-dataset reads are capped at 1 GiB by default, see
+// WithMaxReadBytes. A File is not safe for concurrent use; separate Files are
+// independent. CreateForWrite and OpenForWrite return a FileWriter.
 package hdf5
 
 import (

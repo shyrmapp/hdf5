@@ -246,7 +246,6 @@ func ensureRefCountMessage(fw *FileWriter, oh *core.ObjectHeader) error {
 //
 // Limitations:
 //   - Symbol table format only (links cannot be added to dense-format groups)
-//   - Soft links are not resolved on read
 //   - No circular link detection
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 1 (Soft Link)
@@ -329,7 +328,6 @@ func validateSoftLinkTargetPath(path string) error {
 //
 // Limitations:
 //   - Symbol table format only (links cannot be added to dense-format groups)
-//   - External links are not resolved on read
 //   - No file caching or performance optimization
 //
 // HDF5 Spec: Section IV.A.2.f "Link Message" - Type 64 (External Link)

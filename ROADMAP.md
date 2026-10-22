@@ -1,6 +1,6 @@
 # HDF5 Go Library - Development Roadmap
 
-**Current version**: v0.17.0 (see [CHANGELOG.md](CHANGELOG.md) for release history)
+**Current version**: see [CHANGELOG.md](CHANGELOG.md) for release history
 
 ## 🎯 Vision
 
