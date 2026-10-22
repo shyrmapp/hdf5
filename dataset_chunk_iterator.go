@@ -65,7 +65,7 @@ func (d *Dataset) ChunkIterator() (*ChunkIterator, error) {
 //	}
 func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator, error) {
 	// Read object header to get layout info.
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -132,7 +132,7 @@ func (d *Dataset) ChunkIteratorWithContext(ctx context.Context) (*ChunkIterator,
 // collectChunkCoordinates retrieves all chunk coordinates from the layout's
 // chunk index (v1 B-tree for layout v3, modern chunk indexes for v4/v5).
 func (d *Dataset) collectChunkCoordinates(layout *core.DataLayoutMessage, dataspace *core.DataspaceMessage) ([][]uint64, error) {
-	allChunks, err := core.CollectChunks(d.file.osFile, layout, dataspace, d.file.sb)
+	allChunks, err := core.CollectChunks(d.file.reader, layout, dataspace, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect chunks: %w", err)
 	}

@@ -18,6 +18,7 @@ import (
 // File represents an open HDF5 file with its metadata and root group.
 type File struct {
 	osFile        *os.File
+	reader        io.ReaderAt // osFile shifted by the superblock's base address
 	sb            *core.Superblock
 	root          *Group
 	loadingBTrees map[uint64]bool // B-trees on the current load path, to cut ancestor cycles
@@ -67,12 +68,6 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 		return nil, fmt.Errorf("file open failed: %w", err)
 	}
 
-	// Verify HDF5 signature before reading superblock.
-	if !isHDF5File(f) {
-		_ = f.Close()
-		return nil, errors.New("not an HDF5 file")
-	}
-
 	// Get file size for address validation.
 	fi, err := f.Stat()
 	if err != nil {
@@ -84,11 +79,19 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	sb, err := core.ReadSuperblock(f)
 	if err != nil {
 		_ = f.Close()
+		if errors.Is(err, core.ErrNoSignature) {
+			return nil, errors.New("not an HDF5 file")
+		}
 		return nil, fmt.Errorf("superblock read failed: %w", err)
 	}
 
+	// Addresses in the file are relative to the superblock, which a user block
+	// can push past offset 0; the section reader shifts every read by that base.
+	//nolint:gosec // G115: BaseAddress is a located file offset, so <= fileSize
+	base := int64(sb.BaseAddress)
 	file := &File{
 		osFile:        f,
+		reader:        io.NewSectionReader(f, base, fileSize-base),
 		sb:            sb,
 		loadingBTrees: make(map[uint64]bool),
 		loadingGroups: make(map[uint64]bool),
@@ -99,7 +102,7 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 
 	// Validate root group address.
 	//nolint:gosec // G115: File size is always positive, safe to convert int64 to uint64
-	if sb.RootGroup >= uint64(fileSize) {
+	if sb.RootGroup >= uint64(fileSize-base) {
 		_ = f.Close()
 		return nil, fmt.Errorf("root group address %d beyond file size %d",
 			sb.RootGroup, fileSize)
@@ -116,16 +119,6 @@ func Open(filename string, opts ...OpenOption) (*File, error) {
 	file.root.name = "/"
 
 	return file, nil
-}
-
-// isHDF5File verifies HDF5 file signature.
-func isHDF5File(r io.ReaderAt) bool {
-	buf := make([]byte, 8)
-
-	if _, err := r.ReadAt(buf, 0); err != nil {
-		return false
-	}
-	return string(buf) == core.Signature
 }
 
 // Close closes the HDF5 file and releases associated resources.
@@ -174,9 +167,10 @@ func (f *File) Superblock() *core.Superblock {
 	return f.sb
 }
 
-// Reader returns the underlying file reader for low-level access.
+// Reader returns the file reader for low-level access. Offsets are HDF5
+// addresses, relative to Superblock().BaseAddress (non-zero only with a user block).
 func (f *File) Reader() io.ReaderAt {
-	return f.osFile
+	return f.reader
 }
 
 // readSignature reads 4 bytes at address and returns string.

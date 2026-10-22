@@ -33,7 +33,7 @@ func (d *Dataset) readHyperslabContiguous(
 	if isLinearRun(selection, dims) {
 		off := layout.DataAddress + calculateLinearOffset(selection.Start, dims)*es
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := d.file.osFile.ReadAt(out, int64(off)); err != nil {
+		if _, err := d.file.reader.ReadAt(out, int64(off)); err != nil {
 			return nil, fmt.Errorf("failed to read contiguous data: %w", err)
 		}
 		return core.ConvertToFloat64(out, datatype, n, d.file.maxReadBytes)
@@ -59,7 +59,7 @@ func (d *Dataset) readHyperslabContiguous(
 		at[nd-1] = lo
 		off := layout.DataAddress + calculateLinearOffset(at, dims)*es
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-		if _, err := d.file.osFile.ReadAt(span, int64(off)); err != nil {
+		if _, err := d.file.reader.ReadAt(span, int64(off)); err != nil {
 			return nil, fmt.Errorf("failed to read contiguous row: %w", err)
 		}
 		for _, c := range cols {

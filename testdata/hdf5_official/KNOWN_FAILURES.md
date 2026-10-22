@@ -20,15 +20,15 @@ with explanations and planned resolution paths.
 **Latest Test Run** (2025-11-13):
 - **Total files**: 433
 - **Pass**: 380 files
-- **Fail**: 7 files (unsupported features - see below)
+- **Fail**: 2 files (unsupported features - see below)
 - **Skip**: 46 files (multi-file formats, legacy, truly corrupted)
 - **Valid single-file HDF5**: 387 files (433 - 39 multi-file - 1 legacy - 6 corrupted)
-- **Pass rate**: **98.2%** (380/387 valid single-file) ✅
+- **Pass rate**: **99.5%** (385/387 valid single-file) ✅
 - **Duration**: ~50-100ms
 
 **Status**: ✅ **EXCEEDS TARGET** (target was >90%, goal was >95%)
 
-**Note**: The 7 "failed" files are valid HDF5 files that use features we don't yet support (user blocks, SOHM, etc.). The C library reads them successfully.
+**Note**: The 2 "failed" files are valid HDF5 files that use features we don't yet support (SOHM, metadata cache image). The C library reads them successfully.
 
 ---
 
@@ -105,7 +105,7 @@ These files are intentionally corrupted or incomplete. Even the C library cannot
 
 ---
 
-### 5. Unsupported Features - 7 files ⚠️
+### 5. Unsupported Features - 2 files ⚠️
 
 **Status**: CURRENTLY UNSUPPORTED (deferred to v0.13.0+)
 
@@ -114,31 +114,21 @@ features we don't yet support.
 
 **Files**:
 
-**User Blocks** (3 files):
-- `twithub.h5` - File with 512-byte user block
-- `twithub513.h5` - File with 513-byte user block
-- User block = arbitrary data before HDF5 signature
-
 **SOHM (Shared Object Header Messages)** (1 file):
 - `h5stat_tsohm.h5` - Uses shared object header optimization
 - Advanced feature for reducing file size
 
-**Non-default Sizes** (1 file):
-- `tsizeslheap.h5` - sizeof_addr=4, sizeof_size=4 (non-standard)
-- We currently require sizeof_addr=8, sizeof_size=8
-
-**FSM Persistence** (2 files):
-- `h5clear_fsm_persist_user_equal.h5` - Free-space manager persistence
-- `h5clear_fsm_persist_user_less.h5` - Free-space manager persistence
-
-**MDC Image** (1 file, counted above):
+**MDC Image** (1 file):
 - `h5clear_mdc_image.h5` - Metadata cache image
 - Advanced caching optimization
 
 **Reason**: Advanced features not yet implemented.
 **C Library**: Reads all these files successfully.
-**Priority**: Medium (would improve compatibility from 98.2% to 100%).
-**Impact**: Rare in practice (user blocks ~1%, SOHM ~2% of files).
+**Priority**: Medium (would improve compatibility from 99.5% to 100%).
+**Impact**: Rare in practice (SOHM ~2% of files).
+
+User blocks, FSM-persistence files and non-default sizes (`twithub*.h5`,
+`h5clear_fsm_persist_user_{equal,less}.h5`, `tsizeslheap.h5`) read since 2026-10-22.
 
 ---
 

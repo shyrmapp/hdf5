@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Files with a user block open.** The superblock is located at 0 or a power
+  of two from 512 on, as the C library does, and every read is shifted by its
+  position. `OpenForWrite` refuses such files. Five previously skipped files
+  of the official test suite now pass (385/387).
+
 ### Fixed
 
 - **Dense attributes are read.** The Attribute Info message was matched as

@@ -60,7 +60,7 @@ type HyperslabSelection struct {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -139,7 +139,7 @@ func (d *Dataset) ReadSlice(start, count []uint64) (interface{}, error) {
 //   - error: Error if selection is invalid or reading fails
 func (d *Dataset) ReadHyperslab(selection *HyperslabSelection) (interface{}, error) {
 	// Read object header to get dataset metadata
-	header, err := core.ReadObjectHeader(d.file.osFile, d.address, d.file.sb)
+	header, err := core.ReadObjectHeader(d.file.reader, d.address, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object header: %w", err)
 	}
@@ -484,7 +484,7 @@ func (d *Dataset) readHyperslabChunked(
 
 	// Collect chunk locations from the layout's chunk index (v1 B-tree for
 	// layout v3, modern chunk indexes for layout v4/v5).
-	allChunks, err := core.CollectChunks(d.file.osFile, layout, dataspace, d.file.sb)
+	allChunks, err := core.CollectChunks(d.file.reader, layout, dataspace, d.file.sb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk index: %w", err)
 	}
@@ -641,7 +641,7 @@ func (d *Dataset) extractFromChunk(
 	// Read chunk data (use nbytes from index)
 	chunkData := make([]byte, chunkInfo.nbytes)
 	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	_, err := d.file.osFile.ReadAt(chunkData, int64(chunkInfo.address))
+	_, err := d.file.reader.ReadAt(chunkData, int64(chunkInfo.address))
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %w", err)
 	}
