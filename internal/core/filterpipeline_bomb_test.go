@@ -27,7 +27,8 @@ func zlibBomb(t *testing.T, size int) []byte {
 // buffer the whole expansion.
 func TestDeflateBombRejected(t *testing.T) {
 	const chunkBytes = 64 << 10
-	bomb := zlibBomb(t, 64<<20) // 64 MiB from a few KiB
+	// 16 MiB, not more: Go 1.27's flate packs zeros at ~512:1, so 64 MiB no longer fits.
+	bomb := zlibBomb(t, 16<<20)
 
 	require.Less(t, len(bomb), chunkBytes,
 		"the bomb must be smaller than the chunk it claims to be")
