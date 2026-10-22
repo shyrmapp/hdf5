@@ -3,7 +3,6 @@ package core
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -24,7 +23,7 @@ type Attribute struct {
 	offsetSize int
 }
 
-// AttributeInfoMessage represents the Attribute Info Message (0x000F).
+// AttributeInfoMessage represents the Attribute Info Message (0x0015).
 // This message contains information about dense attribute storage.
 // Reference: H5Adense.c in C library.
 type AttributeInfoMessage struct {
@@ -435,480 +434,33 @@ func ParseAttributesFromMessages(r io.ReaderAt, messages []*HeaderMessage, sb *S
 	return attributes, nil
 }
 
-// readDenseAttributes reads attributes from dense storage (fractal heap + B-tree v2).
-//
-// Dense attribute storage is used when there are many attributes (> 8 by default).
-// In this format, attributes are stored in a fractal heap with a B-tree v2 index.
-//
-// This is a self-contained implementation that directly reads B-tree and heap structures
-// without importing the structures package (to avoid circular dependencies).
-//
-// Reference:
-//   - C Library: H5Adense.c - H5A__dense_iterate()
-//   - Format Spec: Section III.E (Fractal Heap) and III.A.2 (B-tree v2)
+// readDenseAttributes reads attributes from dense storage: the name-index
+// B-tree v2 yields fractal-heap IDs, each resolving to an attribute message.
+// Reference: H5Adense.c - H5A__dense_iterate().
 func readDenseAttributes(r io.ReaderAt, attrInfo *AttributeInfoMessage, sb *Superblock) ([]*Attribute, error) {
 	if attrInfo == nil || sb == nil {
 		return nil, fmt.Errorf("attribute info or superblock is nil")
 	}
-
 	if attrInfo.FractalHeapAddr == 0 || attrInfo.BTreeNameIndexAddr == 0 {
 		return nil, fmt.Errorf("invalid dense attribute addresses (heap=0x%X, btree=0x%X)",
 			attrInfo.FractalHeapAddr, attrInfo.BTreeNameIndexAddr)
 	}
 
-	// Step 1: Read B-tree v2 header to get root node address and record count
-	btreeHeader, err := readBTreeV2HeaderRaw(r, attrInfo.BTreeNameIndexAddr, sb)
+	objects, err := ReadDenseHeapObjects(r, attrInfo.BTreeNameIndexAddr, attrInfo.FractalHeapAddr, sb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read B-tree header: %w", err)
+		return nil, err
 	}
-
-	// Step 2: Read B-tree leaf node to get all heap IDs
-	heapIDs, err := readBTreeV2LeafRecords(r, btreeHeader.RootNodeAddr, btreeHeader.NumRecordsRoot, sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read B-tree leaf: %w", err)
-	}
-
-	if len(heapIDs) == 0 {
-		return []*Attribute{}, nil
-	}
-
-	// Step 3: Read fractal heap header to find direct block
-	heapHeader, err := readFractalHeapHeaderRaw(r, attrInfo.FractalHeapAddr, sb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read heap header: %w", err)
-	}
-
-	// Step 4: For each heap ID, read attribute from heap
-	attributes := make([]*Attribute, 0, len(heapIDs))
-	for i, heapID := range heapIDs {
-		// Parse heap ID to get offset and length
-		offset, length, err := parseHeapID(heapID, heapHeader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse heap ID %d: %w", i, err)
-		}
-
-		// Read object from direct block
-		objectData, err := readHeapObject(r, heapHeader.RootBlockAddress, offset, length, sb, heapHeader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read heap object %d: %w", i, err)
-		}
-
-		// Parse as attribute message (version 3 for dense attributes)
-		attr, err := ParseAttributeMessage(objectData, sb.Endianness)
+	attributes := make([]*Attribute, 0, len(objects))
+	for i, data := range objects {
+		attr, err := ParseAttributeMessage(data, sb.Endianness)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse attribute %d: %w", i, err)
 		}
-
-		// Set reader for variable-length type resolution
 		attr.reader = r
 		attr.offsetSize = int(sb.OffsetSize)
 		attributes = append(attributes, attr)
 	}
-
 	return attributes, nil
-}
-
-// btreeV2HeaderRaw represents a minimal B-tree v2 header.
-// Reference: H5B2hdr.c in C library.
-type btreeV2HeaderRaw struct {
-	Version        uint8
-	Type           uint8
-	NodeSize       uint32
-	RecordSize     uint16
-	Depth          uint16
-	RootNodeAddr   uint64
-	NumRecordsRoot uint16
-	TotalRecords   uint64
-}
-
-// readBTreeV2HeaderRaw reads a B-tree v2 header directly from file.
-// Format (Section III.A.2 of HDF5 spec):
-//   - Signature "BTHD" (4 bytes)
-//   - Version (1 byte)
-//   - Type (1 byte)
-//   - Node Size (4 bytes)
-//   - Record Size (2 bytes)
-//   - Depth (2 bytes)
-//   - Split Percent (1 byte)
-//   - Merge Percent (1 byte)
-//   - Root Node Address (offsetSize bytes)
-//   - Number of Records in Root (2 bytes)
-//   - Total Records (8 bytes)
-//   - Checksum (4 bytes)
-func readBTreeV2HeaderRaw(r io.ReaderAt, addr uint64, sb *Superblock) (*btreeV2HeaderRaw, error) {
-	// Allocate buffer for header (max size with 8-byte offsets: 4+1+1+4+2+2+1+1+8+2+8+4 = 38 bytes)
-	buf := make([]byte, 38)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err := r.ReadAt(buf, int64(addr))
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read failed at 0x%X: %w", addr, err)
-	}
-	if n < 20 {
-		return nil, fmt.Errorf("header too short: %d bytes", n)
-	}
-
-	// Check signature
-	if string(buf[0:4]) != "BTHD" {
-		return nil, fmt.Errorf("invalid B-tree v2 signature: %q", buf[0:4])
-	}
-
-	header := &btreeV2HeaderRaw{}
-	offset := 4
-
-	// Version
-	header.Version = buf[offset]
-	offset++
-
-	// Type
-	header.Type = buf[offset]
-	offset++
-
-	// Node Size (4 bytes)
-	header.NodeSize = sb.Endianness.Uint32(buf[offset : offset+4])
-	offset += 4
-
-	// Record Size (2 bytes)
-	header.RecordSize = sb.Endianness.Uint16(buf[offset : offset+2])
-	offset += 2
-
-	// Depth (2 bytes)
-	header.Depth = sb.Endianness.Uint16(buf[offset : offset+2])
-	offset += 2
-
-	// Skip Split % and Merge % (1 byte each)
-	offset += 2
-
-	// Root Node Address (offsetSize bytes)
-	offsetSize := int(sb.OffsetSize)
-	if offset+offsetSize > len(buf) {
-		return nil, fmt.Errorf("buffer too short for root node address")
-	}
-	header.RootNodeAddr = readAddress(buf[offset:offset+offsetSize], offsetSize)
-	offset += offsetSize
-
-	// Number of Records in Root (2 bytes)
-	if offset+2 > len(buf) {
-		return nil, fmt.Errorf("buffer too short for num records")
-	}
-	header.NumRecordsRoot = sb.Endianness.Uint16(buf[offset : offset+2])
-	offset += 2
-
-	// Total Records (8 bytes)
-	if offset+8 > len(buf) {
-		return nil, fmt.Errorf("buffer too short for total records")
-	}
-	header.TotalRecords = sb.Endianness.Uint64(buf[offset : offset+8])
-
-	return header, nil
-}
-
-// readBTreeV2LeafRecords reads heap IDs from a B-tree v2 leaf node.
-// Format (Section III.A.2 of HDF5 spec):
-//   - Signature "BTLF" (4 bytes)
-//   - Version (1 byte)
-//   - Type (1 byte)
-//   - Records (N × record size):
-//     Each record: Name Hash (4 bytes) + Heap ID (7 bytes)
-//   - Checksum (4 bytes)
-func readBTreeV2LeafRecords(r io.ReaderAt, addr uint64, numRecords uint16, _ *Superblock) ([][7]byte, error) {
-	// Each record: 4 (hash) + 7 (heap ID) = 11 bytes
-	// Header: 4 (sig) + 1 (ver) + 1 (type) = 6 bytes
-	// Checksum: 4 bytes
-	bufSize := 6 + int(numRecords)*11 + 4
-	buf := make([]byte, bufSize)
-
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err := r.ReadAt(buf, int64(addr))
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read failed at 0x%X: %w", addr, err)
-	}
-	if n < 10 {
-		return nil, fmt.Errorf("leaf node too short: %d bytes", n)
-	}
-
-	// Check signature
-	if string(buf[0:4]) != "BTLF" {
-		return nil, fmt.Errorf("invalid B-tree v2 leaf signature: %q", buf[0:4])
-	}
-
-	// Skip version (1) and type (1)
-	offset := 6
-
-	// Read records
-	heapIDs := make([][7]byte, numRecords)
-	for i := uint16(0); i < numRecords; i++ {
-		if offset+11 > len(buf) {
-			return nil, fmt.Errorf("buffer too short for record %d", i)
-		}
-
-		// Skip name hash (4 bytes), copy heap ID (7 bytes)
-		offset += 4
-		copy(heapIDs[i][:], buf[offset:offset+7])
-		offset += 7
-	}
-
-	return heapIDs, nil
-}
-
-// fractalHeapHeaderRaw represents a minimal fractal heap header.
-// Reference: H5HFhdr.c in C library.
-type fractalHeapHeaderRaw struct {
-	Version            uint8
-	HeapIDLen          uint16
-	RootBlockAddress   uint64
-	MaxHeapSize        uint16 // Log2 of max heap size
-	MaxDirectBlockSize uint64 // Max direct block size
-	MaxManagedObjSize  uint32 // Max managed object size
-	HeapOffsetSize     uint8  // Computed from MaxHeapSize
-	HeapLengthSize     uint8  // Computed from MaxDirectBlockSize and MaxManagedObjSize
-	ChecksumDirBlocks  bool   // Whether direct blocks have checksums
-}
-
-// readFractalHeapHeaderRaw reads a fractal heap header directly from file.
-// Format (Section III.E of HDF5 spec):
-//   - Signature "FRHP" (4 bytes)
-//   - Version (1 byte)
-//   - Heap ID Length (2 bytes)
-//   - I/O Filters Encoded Length (2 bytes)
-//   - Flags (1 byte) - bit 1 indicates checksum
-//   - ... many fields ...
-//   - Max Direct Block Size (sizeofSize bytes) at variable offset
-//   - Max Heap Size (2 bytes)
-//   - ... more fields ...
-//   - Root Block Address (offsetSize bytes) at offset 132
-//   - Checksum (4 bytes)
-func readFractalHeapHeaderRaw(r io.ReaderAt, addr uint64, sb *Superblock) (*fractalHeapHeaderRaw, error) {
-	// We need to read up to offset 132 + offsetSize + 4 (checksum)
-	// Max with 8-byte offsets: 132 + 8 + 4 = 144 bytes
-	buf := make([]byte, 144)
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err := r.ReadAt(buf, int64(addr))
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read failed at 0x%X: %w", addr, err)
-	}
-	if n < 20 {
-		return nil, fmt.Errorf("heap header too short: %d bytes", n)
-	}
-
-	// Check signature
-	if string(buf[0:4]) != "FRHP" {
-		return nil, fmt.Errorf("invalid fractal heap signature: %q", buf[0:4])
-	}
-
-	header := &fractalHeapHeaderRaw{}
-	offset := 4
-
-	// Version
-	header.Version = buf[offset]
-	offset++
-
-	// Heap ID Length (2 bytes)
-	header.HeapIDLen = sb.Endianness.Uint16(buf[offset : offset+2])
-	offset += 2
-
-	// I/O Filters Encoded Length (2 bytes)
-	filtersLen := sb.Endianness.Uint16(buf[offset : offset+2])
-	offset += 2
-
-	// Flags (1 byte)
-	flags := buf[offset]
-	header.ChecksumDirBlocks = (flags & 0x02) != 0
-	offset++
-
-	// Max Managed Object Size (4 bytes)
-	header.MaxManagedObjSize = sb.Endianness.Uint32(buf[offset : offset+4])
-
-	// Skip to Table Width (offset 110 from start)
-	offset = 110
-
-	// Table Width (2 bytes)
-	offset += 2
-
-	// Starting Block Size (sizeofSize bytes)
-	sizeofSize := int(sb.LengthSize)
-	offset += sizeofSize
-
-	// Max Direct Block Size (sizeofSize bytes)
-	var maxDirBlockSizeBytes = buf[offset : offset+sizeofSize]
-	header.MaxDirectBlockSize = 0
-	for i := 0; i < sizeofSize; i++ {
-		header.MaxDirectBlockSize |= uint64(maxDirBlockSizeBytes[i]) << (8 * i)
-	}
-	offset += sizeofSize
-
-	// Max Heap Size (2 bytes) - log2 of maximum heap size
-	if offset+2 > len(buf) {
-		return nil, fmt.Errorf("buffer too short for max heap size")
-	}
-	header.MaxHeapSize = sb.Endianness.Uint16(buf[offset : offset+2])
-
-	// Compute HeapOffsetSize from MaxHeapSize
-	// HeapOffsetSize = ceil(MaxHeapSize / 8)
-	//nolint:gosec // G115: MaxHeapSize is bounded by format specification
-	header.HeapOffsetSize = uint8((header.MaxHeapSize + 7) / 8)
-
-	// Compute HeapLengthSize
-	// HeapLengthSize = min(offsetSize(MaxDirectBlockSize), offsetSize(MaxManagedObjSize))
-	maxDirBlockOffsetSize := computeOffsetSize(header.MaxDirectBlockSize)
-	maxManSizeEncoded := computeOffsetSize(uint64(header.MaxManagedObjSize))
-	if maxDirBlockOffsetSize < maxManSizeEncoded {
-		header.HeapLengthSize = maxDirBlockOffsetSize
-	} else {
-		header.HeapLengthSize = maxManSizeEncoded
-	}
-
-	// Skip to Root Block Address at offset 132
-	offset = 132
-
-	// Root Block Address (offsetSize bytes)
-	offsetSize := int(sb.OffsetSize)
-	if offset+offsetSize > len(buf) {
-		return nil, fmt.Errorf("buffer too short for root block address")
-	}
-	header.RootBlockAddress = readAddress(buf[offset:offset+offsetSize], offsetSize)
-
-	// Note: We ignore filtersLen for now (assume no filters in dense attributes)
-	_ = filtersLen
-
-	return header, nil
-}
-
-// computeOffsetSize computes the number of bytes needed to store a value.
-// Reference: H5HF.c - H5HF__dtable_size_to_row() and similar.
-func computeOffsetSize(value uint64) uint8 {
-	if value == 0 {
-		return 1
-	}
-
-	// Find highest bit set
-	bits := 0
-	v := value
-	for v > 0 {
-		bits++
-		v >>= 1
-	}
-
-	// Round up to bytes
-	return uint8((bits + 7) / 8)
-}
-
-// parseHeapID parses a 7-byte heap ID into offset and length.
-// Format:
-//   - Byte 0: Version (bits 4-7) and Type (bits 0-3)
-//   - Bytes 1-4: Offset (uint32, little-endian)
-//   - Bytes 5-6: Length (uint16, little-endian)
-func parseHeapID(heapID [7]byte, header *fractalHeapHeaderRaw) (offset, length uint64, err error) {
-	// Check type (bits 4-5 of byte 0, per HDF5 format spec)
-	heapType := (heapID[0] & 0x30) >> 4
-	if heapType != 0 {
-		return 0, 0, fmt.Errorf("unsupported heap ID type: %d (only managed objects supported)", heapType)
-	}
-
-	idx := 1
-
-	// Offset (variable-length, HeapOffsetSize bytes, little-endian)
-	offset = 0
-	for i := 0; i < int(header.HeapOffsetSize) && idx < 7; i++ {
-		offset |= uint64(heapID[idx]) << (8 * i)
-		idx++
-	}
-
-	// Length (variable-length, HeapLengthSize bytes, little-endian)
-	length = 0
-	for i := 0; i < int(header.HeapLengthSize) && idx < 7; i++ {
-		length |= uint64(heapID[idx]) << (8 * i)
-		idx++
-	}
-
-	return offset, length, nil
-}
-
-// readHeapObject reads an object from a fractal heap direct block.
-// Format of Direct Block (Section III.E of HDF5 spec):
-//   - Signature "FHDB" (4 bytes)
-//   - Version (1 byte)
-//   - Heap Header Address (offsetSize bytes)
-//   - Block Offset (heapOffsetSize bytes from heap header)
-//   - Managed Objects Data (variable)
-//   - Optional Checksum (4 bytes if ChecksumDirBlocks flag set)
-func readHeapObject(r io.ReaderAt, blockAddr, offset, length uint64, sb *Superblock, header *fractalHeapHeaderRaw) ([]byte, error) {
-	// Read direct block header to determine object data start
-	// Header size: 4 (sig) + 1 (ver) + offsetSize (heap addr) + heapOffsetSize (block offset)
-	// + 4 (checksum, ONLY if ChecksumDirBlocks flag is set in the heap header).
-	// Files written by netCDF-4 / hdf5 1.10+ commonly turn this on; missing the
-	// checksum bytes shifts every subsequent object read 4 bytes earlier and
-	// returns garbage from the trailing checksum of the previous object.
-	headerSize := 4 + 1 + int(sb.OffsetSize) + int(header.HeapOffsetSize)
-	if header.ChecksumDirBlocks {
-		headerSize += 4
-	}
-	headerBuf := make([]byte, headerSize+16) // Extra bytes for safety
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err := r.ReadAt(headerBuf, int64(blockAddr))
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read failed at 0x%X: %w", blockAddr, err)
-	}
-	if n < headerSize {
-		return nil, fmt.Errorf("direct block too short: got %d bytes, need %d", n, headerSize)
-	}
-
-	// Check signature
-	if string(headerBuf[0:4]) != "FHDB" {
-		return nil, fmt.Errorf("invalid direct block signature: %q", headerBuf[0:4])
-	}
-
-	// Skip version (1 byte)
-	headerOffset := 5
-
-	// Skip heap header address (offsetSize bytes)
-	headerOffset += int(sb.OffsetSize)
-
-	// Read block offset (heapOffsetSize bytes from heap header)
-	// This is the offset of this block in heap space
-	blockOffsetBytes := headerBuf[headerOffset : headerOffset+int(header.HeapOffsetSize)]
-	var blockOffset uint64
-	for i := 0; i < int(header.HeapOffsetSize); i++ {
-		blockOffset |= uint64(blockOffsetBytes[i]) << (8 * i)
-	}
-	headerOffset += int(header.HeapOffsetSize)
-
-	// Calculate relative offset: object offset (in heap space) - block offset (in heap space)
-	if offset < blockOffset {
-		return nil, fmt.Errorf("object offset 0x%X before block offset 0x%X", offset, blockOffset)
-	}
-	relativeOffset := offset - blockOffset
-
-	// When ChecksumDirBlocks is set, the heap-address-space origin sits at
-	// the START of the FHDB block (so heap-id offset 21 maps to FHDB byte
-	// 21 — the first byte AFTER header + checksum). When the flag is
-	// clear, the origin sits at the start of the managed-object area
-	// (so heap-id offset 0 maps to the byte right after the header).
-	//
-	// We collapse these two conventions by using the raw relative offset
-	// when checksum is present (header bytes are part of the heap address
-	// space), and adding headerOffset otherwise. The first branch is what
-	// netCDF-4 / hdf5 1.10.x emit; the second matches scigolib's writer
-	// fixtures and pre-1.10 files.
-	var objectAddr uint64
-	if header.ChecksumDirBlocks {
-		objectAddr = blockAddr + relativeOffset
-	} else {
-		//nolint:gosec // G115: headerOffset bounded by header size specification
-		objectAddr = blockAddr + uint64(headerOffset) + relativeOffset
-	}
-	objectData := make([]byte, length)
-
-	//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface
-	n, err = r.ReadAt(objectData, int64(objectAddr))
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read object failed at 0x%X: %w", objectAddr, err)
-	}
-	//nolint:gosec // G115: Safe comparison, length bounded by heap object size
-	if uint64(n) < length {
-		return nil, fmt.Errorf("object data too short: got %d bytes, expected %d", n, length)
-	}
-
-	return objectData, nil
 }
 
 // EncodeAttributeFromStruct encodes an Attribute struct to bytes (attribute message format).
@@ -949,7 +501,7 @@ func EncodeAttributeFromStruct(attr *Attribute, sb *Superblock) ([]byte, error) 
 	return EncodeAttributeMessage(attr.Name, attr.Datatype, attr.Dataspace, attr.Data)
 }
 
-// ParseAttributeInfoMessage parses an Attribute Info Message (0x000F).
+// ParseAttributeInfoMessage parses an Attribute Info Message (0x0015).
 // Reference: H5Oainfo.c in C library.
 // Format:
 // - Version (1 byte)
@@ -980,14 +532,12 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	trackCreationOrder := (msg.Flags & 0x01) != 0
 	indexCreationOrder := (msg.Flags & 0x02) != 0
 
-	// Max Compact and Min Dense (2 bytes each) - only if creation order tracked
+	// Maximum Creation Index (2 bytes) - only if creation order tracked
 	if trackCreationOrder {
-		if offset+4 > len(data) {
-			return nil, fmt.Errorf("attribute info message too short for max compact/min dense")
+		if offset+2 > len(data) {
+			return nil, fmt.Errorf("attribute info message too short for max creation index")
 		}
 		msg.MaxCreationIndex = uint64(sb.Endianness.Uint16(data[offset : offset+2]))
-		offset += 2
-		// Skip Min Dense (2 bytes) - not stored in struct
 		offset += 2
 	}
 
@@ -998,6 +548,12 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	}
 	msg.FractalHeapAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
 	offset += offsetSize
+	// Objects that track creation order but still store their attributes in
+	// the header carry undefined addresses; report those as "no dense storage" (0).
+	undefined := isUndefinedAddress(msg.FractalHeapAddr, sb.OffsetSize)
+	if undefined {
+		msg.FractalHeapAddr = 0
+	}
 
 	// B-tree Name Index Address (offset size bytes)
 	if offset+offsetSize > len(data) {
@@ -1005,6 +561,9 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 	}
 	msg.BTreeNameIndexAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
 	offset += offsetSize
+	if undefined {
+		msg.BTreeNameIndexAddr = 0
+	}
 
 	// B-tree Order Index Address (offset size bytes) - only if indexed
 	if indexCreationOrder {
@@ -1012,6 +571,9 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 			return nil, fmt.Errorf("attribute info message too short for btree order index address")
 		}
 		msg.BTreeOrderIndexAddr = readAddress(data[offset:offset+offsetSize], offsetSize)
+		if isUndefinedAddress(msg.BTreeOrderIndexAddr, sb.OffsetSize) {
+			msg.BTreeOrderIndexAddr = 0
+		}
 	}
 
 	return msg, nil
@@ -1024,8 +586,7 @@ func ParseAttributeInfoMessage(data []byte, sb *Superblock) (*AttributeInfoMessa
 // Format:
 // - Version (1 byte): 0
 // - Flags (1 byte): creation order tracking/indexing
-// - Max Compact (2 bytes): Optional, if bit 0 of flags set
-// - Min Dense (2 bytes): Optional, if bit 0 of flags set
+// - Max Creation Index (2 bytes): Optional, if bit 0 of flags set
 // - Fractal Heap Address (8 bytes)
 // - B-tree Name Index Address (8 bytes)
 // - B-tree Order Index Address (8 bytes): Optional, if bit 1 of flags set
@@ -1050,9 +611,9 @@ func EncodeAttributeInfoMessage(aim *AttributeInfoMessage, sb *Superblock) ([]by
 	trackCreationOrder := (aim.Flags & 0x01) != 0
 	indexCreationOrder := (aim.Flags & 0x02) != 0
 
-	// Max Compact/Min Dense (2 bytes each) if creation order tracked
+	// Maximum Creation Index (2 bytes) if creation order tracked
 	if trackCreationOrder {
-		size += 4 // 2 for max compact + 2 for min dense
+		size += 2
 	}
 
 	// Heap address (offsetSize bytes)
@@ -1078,14 +639,9 @@ func EncodeAttributeInfoMessage(aim *AttributeInfoMessage, sb *Superblock) ([]by
 	buf[offset] = aim.Flags
 	offset++
 
-	// Max Compact/Min Dense if creation order tracked
+	// Maximum Creation Index if creation order tracked
 	if trackCreationOrder {
-		// These fields are unused when Flags = 0, but encoding must support them
 		sb.Endianness.PutUint16(buf[offset:], uint16(aim.MaxCreationIndex)) //nolint:gosec // Safe: validated range
-		offset += 2
-
-		// Min Dense (not stored in struct, use 0)
-		sb.Endianness.PutUint16(buf[offset:], 0)
 		offset += 2
 	}
 

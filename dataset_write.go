@@ -2261,6 +2261,9 @@ func (fw *FileWriter) OpenDataset(path string) (*DatasetWriter, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse attribute info: %w", err)
 			}
+			if attrInfoMsg.FractalHeapAddr == 0 {
+				attrInfoMsg = nil // creation order tracked, attributes still compact
+			}
 		}
 	}
 

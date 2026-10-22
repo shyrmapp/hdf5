@@ -118,7 +118,7 @@ func writeAttribute(fw *FileWriter, objectAddr uint64, name string, value interf
 				compactCount++
 			}
 		}
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			hasDenseStorage = true
 		}
 	}
@@ -338,7 +338,7 @@ func writeAttributeWithCachedHeader(fw *FileWriter, objectAddr uint64, oh *core.
 		if msg.Type == core.MsgAttribute {
 			compactCount++
 		}
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			// Dense storage was set up by a previous transition -- use it directly.
 			return writeDenseAttribute(fw, objectAddr, freshOH, name, value, sb)
 		}
@@ -462,7 +462,7 @@ func deleteAttribute(fw *FileWriter, objectAddr uint64, name string) error {
 	// Check storage type
 	hasDenseStorage := false
 	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
+		if hasDenseAttributeInfo(msg, sb) {
 			hasDenseStorage = true
 			break
 		}
@@ -543,6 +543,17 @@ func deleteCompactAttributeFromHeader(fw *FileWriter, objectAddr uint64, oh *cor
 	}
 
 	return nil
+}
+
+// hasDenseAttributeInfo reports whether msg is an Attribute Info message that
+// points at dense storage (objects that only track creation order carry the
+// message with undefined addresses and keep their attributes in the header).
+func hasDenseAttributeInfo(msg *core.HeaderMessage, sb *core.Superblock) bool {
+	if msg.Type != core.MsgAttributeInfo {
+		return false
+	}
+	info, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+	return err == nil && info.FractalHeapAddr != 0
 }
 
 // findAttributeInfo parses the object's Attribute Info message, which exists only with dense storage.

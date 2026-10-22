@@ -25,6 +25,9 @@ type ObjectHeader struct {
 	Messages   []*HeaderMessage
 	Name       string
 	Attributes []*Attribute
+	// AttributesErr is set when attribute decoding failed (for example a
+	// corrupt dense-storage index); the header itself is still usable.
+	AttributesErr error
 
 	// ReferenceCount tracks the number of hard links to this object.
 	// For V1 headers: Stored directly in header (bytes 4-7).
@@ -60,7 +63,7 @@ const (
 	MsgFilterPipeline MessageType = 11 // Filter Pipeline (compression, etc)
 	MsgAttribute      MessageType = 12
 	MsgName           MessageType = 13 // Corrected: Name is 0x000D
-	MsgAttributeInfo  MessageType = 15 // Attribute Info (0x000F) - for dense attribute storage
+	MsgAttributeInfo  MessageType = 21 // Attribute Info (0x0015) - for dense attribute storage
 	MsgContinuation   MessageType = 16 // Object header continuation (0x0010)
 	MsgSymbolTable    MessageType = 17
 	MsgLinkMessage    MessageType = 6
@@ -150,9 +153,9 @@ func ReadObjectHeader(r io.ReaderAt, address uint64, sb *Superblock) (*ObjectHea
 	// Parse attributes from messages (both compact and dense)
 	attributes, err := ParseAttributesFromMessages(r, header.Messages, sb)
 	if err != nil {
-		// Don't fail the whole header read if attributes fail
-		// Attributes are optional - continue without them
-		_ = err
+		// Keep the header usable (groups and datasets still load) but make
+		// the failure visible to Attributes() callers.
+		header.AttributesErr = err
 	} else {
 		header.Attributes = attributes
 	}
@@ -270,6 +273,10 @@ func parseV2Header(r io.ReaderAt, headerAddr uint64, flags uint8, sb *Superblock
 	}
 
 	for current < end {
+		// Trailing bytes too short for a message header are padding.
+		if end-current < msgHeaderSize {
+			break
+		}
 		// Always read 6 bytes - enough for either 4-byte or 6-byte header
 		headerBuf := make([]byte, 6)
 		//nolint:gosec // G115: HDF5 addresses fit in int64 for io.ReaderAt interface

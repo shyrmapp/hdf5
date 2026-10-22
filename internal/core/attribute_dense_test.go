@@ -77,7 +77,7 @@ func TestReadDenseAttributes_ValidAddresses(t *testing.T) {
 
 	// Should fail when trying to read B-tree header
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read B-tree header")
+	require.Contains(t, err.Error(), "btree v2 header")
 	require.Nil(t, attrs)
 }
 

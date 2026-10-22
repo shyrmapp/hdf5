@@ -41,17 +41,15 @@ func TestParseAttributeInfoMessage(t *testing.T) {
 		{
 			name: "with creation order tracking",
 			data: func() []byte {
-				d := make([]byte, 22) // 2 + 2 (max compact) + 2 (min dense) + 8 + 8
+				d := make([]byte, 20) // 2 + 2 (max creation index) + 8 + 8
 				d[0] = 0              // version
 				d[1] = 0x01           // flags: track creation order
-				// Max compact (2 bytes)
+				// Max creation index (2 bytes)
 				binary.LittleEndian.PutUint16(d[2:4], 42)
-				// Min dense (2 bytes)
-				binary.LittleEndian.PutUint16(d[4:6], 8)
 				// Fractal heap address
-				binary.LittleEndian.PutUint64(d[6:14], 0x3000)
+				binary.LittleEndian.PutUint64(d[4:12], 0x3000)
 				// B-tree name index address
-				binary.LittleEndian.PutUint64(d[14:22], 0x4000)
+				binary.LittleEndian.PutUint64(d[12:20], 0x4000)
 				return d
 			}(),
 			offsetSize:  8,
@@ -644,7 +642,7 @@ func TestEncodeAttributeInfoMessage(t *testing.T) {
 				BTreeNameIndexAddr: 0x4000,
 			},
 			offsetSize: 8,
-			wantSize:   22, // 2 + 4 (max/min) + 8 + 8
+			wantSize:   20, // 2 + 2 (max creation index) + 8 + 8
 			wantErr:    false,
 		},
 		{
@@ -671,7 +669,7 @@ func TestEncodeAttributeInfoMessage(t *testing.T) {
 				BTreeOrderIndexAddr: 0xA000,
 			},
 			offsetSize: 8,
-			wantSize:   30, // 2 + 4 + 8 + 8 + 8
+			wantSize:   28, // 2 + 2 + 8 + 8 + 8
 			wantErr:    false,
 		},
 		{
@@ -870,4 +868,41 @@ func TestAttributeReadValue_VariableLengthString(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "variable-length non-string types not yet supported")
 	})
+}
+
+// TestParseAttributeInfoMessage_CLibraryBytes parses a message as written by
+// the HDF5 C library (tracked + indexed creation order).
+func TestParseAttributeInfoMessage_CLibraryBytes(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
+	data := []byte{
+		0x00, 0x03, 0x14, 0x00, // version, flags, max creation index 20
+		0x10, 0x01, 0, 0, 0, 0, 0, 0, // heap
+		0x20, 0x02, 0, 0, 0, 0, 0, 0, // name btree
+		0x30, 0x03, 0, 0, 0, 0, 0, 0, // corder btree
+	}
+	msg, err := ParseAttributeInfoMessage(data, sb)
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), msg.MaxCreationIndex)
+	require.Equal(t, uint64(0x110), msg.FractalHeapAddr)
+	require.Equal(t, uint64(0x220), msg.BTreeNameIndexAddr)
+	require.Equal(t, uint64(0x330), msg.BTreeOrderIndexAddr)
+}
+
+func TestMsgAttributeInfoType(t *testing.T) {
+	require.Equal(t, MessageType(0x15), MsgAttributeInfo)
+}
+
+// Objects that track creation order but keep attributes in the header carry an
+// Attribute Info message with undefined addresses; that means "not dense".
+func TestParseAttributeInfoMessage_UndefinedAddresses(t *testing.T) {
+	sb := &Superblock{OffsetSize: 8, LengthSize: 8, Endianness: binary.LittleEndian}
+	data := []byte{0x00, 0x03, 0x13, 0x00}
+	for i := 0; i < 24; i++ {
+		data = append(data, 0xFF)
+	}
+	msg, err := ParseAttributeInfoMessage(data, sb)
+	require.NoError(t, err)
+	require.Zero(t, msg.FractalHeapAddr)
+	require.Zero(t, msg.BTreeNameIndexAddr)
+	require.Zero(t, msg.BTreeOrderIndexAddr)
 }
