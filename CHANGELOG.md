@@ -35,7 +35,9 @@ Write path:
 - Attributes over 64 KiB are rejected instead of corrupting the header.
 - `OpenForWrite(OpenReadOnly)` then `Close` no longer fails, and `Close`
   releases both file handles even on error.
-- `CreateDenseGroup` rejects blank group and link names.
+- `CreateDenseGroup` writes valid link messages (the hand-encoded ones put the
+  name length where the encoding byte belongs, so the C tools showed a
+  blank-named child) and rejects blank group and link names.
 - Fletcher32 chunks are written with the HDF5 C checksum (big-endian words,
   folding reduction); the old sums were only accepted by C through its
   legacy byte-swap tolerance, except for some data.

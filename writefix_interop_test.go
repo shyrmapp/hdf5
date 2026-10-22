@@ -262,3 +262,19 @@ func TestCInterop_Fletcher32Checksums(t *testing.T) {
 	require.Contains(t, out, "(0): 1, 2, 3, 250, 251, 252, 253")
 	require.Contains(t, out, fmt.Sprintf("%d", rnd[4095]))
 }
+
+// TestCInterop_DenseGroupLinks checks that links written into a dense group
+// carry their names: the old hand-encoded link message put the name length
+// where the encoding byte belongs, so h5ls showed a blank-named child.
+func TestCInterop_DenseGroupLinks(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/dataset1", Float64, []uint64{2})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]float64{1.5, 2.5}))
+	require.NoError(t, fw.CreateDenseGroup("/group", map[string]string{"link1": "/dataset1"}))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, `DATASET "link1"`)
+	require.Contains(t, out, "(0): 1.5, 2.5")
+}
