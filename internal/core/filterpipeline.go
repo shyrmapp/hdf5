@@ -81,7 +81,9 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 
 	// Parse each filter.
 	for i := uint8(0); i < numFilters; i++ {
-		if offset+8 > len(data) {
+		// v1: id, name length, flags, count (8 bytes).
+		// v2: id, [name length only if id >= 256], flags, count (6 or 8 bytes).
+		if offset+6 > len(data) {
 			return nil, fmt.Errorf("filter pipeline truncated at filter %d", i)
 		}
 
@@ -91,9 +93,11 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 		filter.ID = FilterID(binary.LittleEndian.Uint16(data[offset : offset+2]))
 		offset += 2
 
-		// Name length (2 bytes) - for version 1, optional.
 		var nameLength uint16
-		if version == 1 {
+		if version == 1 || filter.ID >= 256 {
+			if offset+6 > len(data) {
+				return nil, fmt.Errorf("filter pipeline truncated at filter %d", i)
+			}
 			nameLength = binary.LittleEndian.Uint16(data[offset : offset+2])
 			offset += 2
 		}
@@ -107,15 +111,14 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 		filter.NumClientData = binary.LittleEndian.Uint16(data[offset : offset+2])
 		offset += 2
 
-		// Filter name (variable length, only in version 1).
-		if version == 1 && nameLength > 0 {
-			// Name is null-terminated and padded to 8-byte boundary.
-			padded := nameLength
-			if padded%8 != 0 {
+		// Filter name: v1 pads it to an 8-byte boundary, v2 does not.
+		if nameLength > 0 {
+			padded := int(nameLength)
+			if version == 1 && padded%8 != 0 {
 				padded += 8 - (padded % 8)
 			}
 
-			if offset+int(padded) > len(data) {
+			if offset+padded > len(data) {
 				return nil, fmt.Errorf("filter name truncated at filter %d", i)
 			}
 
@@ -131,7 +134,7 @@ func ParseFilterPipelineMessage(data []byte) (*FilterPipelineMessage, error) {
 				filter.Name = string(nameBytes)
 			}
 
-			offset += int(padded)
+			offset += padded
 		}
 
 		// Client data (array of uint32).
@@ -201,7 +204,7 @@ func (fp *FilterPipelineMessage) ApplyFilters(data []byte, filterMask uint32, ma
 		// If decompression produces less data than expected, pad with zeros.
 		// This can happen with sparse chunks or chunks at dataset boundaries.
 		if filter.ID == FilterLZF && len(filter.ClientData) >= 3 && filter.ClientData[2] > 0 {
-			expectedSize := int(filter.ClientData[2])
+			expectedSize := int(min(uint64(filter.ClientData[2]), maxOutput)) //nolint:gosec // G115: clamped to maxOutput <= MaxChunkSize
 			if len(result) < expectedSize {
 				// Pad with zeros to match expected size
 				padded := make([]byte, expectedSize)
