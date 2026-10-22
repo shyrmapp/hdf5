@@ -48,7 +48,7 @@ func parseSizedValue(d []byte) []byte {
 		return nil
 	}
 	n := uint64(binary.LittleEndian.Uint32(d))
-	if n == 0 || n > uint64(len(d)-4) {
+	if n == 0 || n > uint64(len(d))-4 {
 		return nil
 	}
 	return d[4 : 4+n]
@@ -62,14 +62,14 @@ func parseNewFillValue(d []byte) []byte {
 	switch d[0] {
 	case 1, 2:
 		// version, alloc time, fill write time, fill defined, [size, value]
-		if len(d) < 4 || d[2] == 2 /* H5D_FILL_TIME_NEVER */ || d[3] == 0 {
+		if len(d) < 4 || d[2] == 1 /* H5D_FILL_TIME_NEVER */ || d[3] == 0 {
 			return nil
 		}
 		return parseSizedValue(d[4:])
 	case 3:
 		// version, flags: bits 0-1 alloc time, 2-3 write time, 4 undefined, 5 defined.
 		flags := d[1]
-		if (flags>>2)&3 == 2 || flags&0x10 != 0 || flags&0x20 == 0 {
+		if (flags>>2)&3 == 1 /* H5D_FILL_TIME_NEVER */ || flags&0x10 != 0 || flags&0x20 == 0 {
 			return nil
 		}
 		return parseSizedValue(d[2:])

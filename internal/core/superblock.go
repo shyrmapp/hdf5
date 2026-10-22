@@ -131,8 +131,8 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		//   88-95: Local heap address (8 bytes) - for cached symbol table
 
 		// Fields after byte 23 are offsetSize wide: base address, free-space
-		// index, EOF, driver info, then the 4+offsetSize..-byte root symbol
-		// table entry: name offset, object header address, cache type (4),
+		// index, EOF, driver info, then the root symbol
+		// table entry: name offset (lengthSize), object header address, cache type (4),
 		// reserved (4), scratch pad (B-tree address, heap address).
 		sb.BaseAddress, err = readValue(24, offsetSize)
 		if err != nil {
@@ -140,7 +140,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		}
 		entry := 24 + 4*int(offsetSize)
 
-		sb.RootGroup, err = readValue(entry+int(offsetSize), offsetSize)
+		sb.RootGroup, err = readValue(entry+int(lengthSize), offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("root group address read failed: %w", err)
 		}
@@ -148,7 +148,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 		// ALWAYS read cached B-tree and Heap addresses for v0 files
 		// These are stored in the scratch-pad area when cache type = 1 (H5G_CACHED_STAB)
 		// Even if object header address is non-zero, the symbol table may use these
-		scratch := entry + 2*int(offsetSize) + 8
+		scratch := entry + int(lengthSize) + int(offsetSize) + 8
 		sb.RootBTreeAddr, err = readValue(scratch, offsetSize)
 		if err != nil {
 			return nil, fmt.Errorf("b-tree address read failed: %w", err)
@@ -186,7 +186,7 @@ func ReadSuperblock(r io.ReaderAt) (*Superblock, error) {
 	}
 
 	// shortcut: addresses are used as absolute file offsets (osFile is a plain
-	// *os.File), so a non-zero base address cannot be honoured; refuse it
+	// *os.File), so a non-zero base address cannot be honored; refuse it
 	// instead of reading garbage. Upgrade by wrapping the ReaderAt with an offset.
 	if sb.BaseAddress != 0 {
 		return nil, fmt.Errorf("non-zero superblock base address 0x%x is not supported", sb.BaseAddress)
