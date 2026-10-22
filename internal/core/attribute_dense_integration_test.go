@@ -627,6 +627,7 @@ func TestReadDenseAttributes_EmptyBTreeLeaf(t *testing.T) {
 	binary.LittleEndian.PutUint64(buf[bthdOffset+16:], 0x0200) // root node at BTLF
 	binary.LittleEndian.PutUint16(buf[bthdOffset+24:], 0)      // 0 records in root
 	binary.LittleEndian.PutUint64(buf[bthdOffset+26:], 0)      // 0 total records
+	binary.LittleEndian.PutUint32(buf[bthdOffset+34:], JenkinsChecksum(buf[bthdOffset:bthdOffset+34]))
 
 	// --- BTLF at 0x0200 ---
 	btlfOffset := 0x0200

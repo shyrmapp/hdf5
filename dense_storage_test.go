@@ -152,6 +152,27 @@ func TestChildLoadError_NotSwallowed(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Corrupting a byte of any dense-storage metadata block must be detected.
+func TestDenseStorage_ChecksumsVerified(t *testing.T) {
+	orig, err := os.ReadFile(filepath.Join("testdata", "c_interop", "links_300.h5"))
+	require.NoError(t, err)
+	for _, sig := range []string{"BTLF", "BTIN", "FHDB", "FHIB", "FRHP", "BTHD"} {
+		t.Run(sig, func(t *testing.T) {
+			data := bytes.Clone(orig)
+			at := bytes.Index(data, []byte(sig))
+			require.GreaterOrEqual(t, at, 0)
+			data[at+12] ^= 0xFF
+			path := filepath.Join(t.TempDir(), "corrupt.h5")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+			f, err := Open(path)
+			if err == nil {
+				_ = f.Close()
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
 // Dense attributes written by this library must be readable by the C tools.
 func TestCInterop_DenseAttributes(t *testing.T) {
 	h5dump := h5tool(t, "h5dump")
