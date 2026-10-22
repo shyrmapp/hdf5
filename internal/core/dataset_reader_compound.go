@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -84,12 +85,21 @@ func ReadDatasetCompound(r io.ReaderAt, header *ObjectHeader, sb *Superblock, ma
 		return []CompoundValue{}, nil
 	}
 
+	// The decoded rows (one map each) cost far more than the raw bytes the
+	// layout readers check, so bound the output before reading anything.
+	if err := checkReadSize(totalElements, compoundRowCost(compoundType), maxBytes, "compound output"); err != nil {
+		return nil, err
+	}
+
 	// 7. Read raw data based on layout.
 	var rawData []byte
 
 	switch {
 	case layout.IsCompact():
 		rawData = layout.CompactData
+		if datatype.Size == 0 || totalElements > uint64(len(rawData))/uint64(datatype.Size) {
+			return nil, fmt.Errorf("compact data holds %d bytes, fewer than %d rows of %d bytes", len(rawData), totalElements, datatype.Size)
+		}
 
 	case layout.IsContiguous():
 		rawData, err = readContiguousData(r, layout.DataAddress, totalElements, uint64(datatype.Size), maxBytes, sb.OffsetSize, FillValueBytes(header, datatype.Size))
@@ -134,7 +144,13 @@ func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements u
 			}
 			memberData := structData[member.Offset:]
 
-			memberValue, err := parseMemberValue(memberData, member.Type, r, sb)
+			var memberValue interface{}
+			var err error
+			if len(member.Dims) > 0 {
+				memberValue, err = decodeArray(memberData, member.Type, member.Dims, r, sb)
+			} else {
+				memberValue, err = parseMemberValue(memberData, member.Type, r, sb)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse member %s: %w", member.Name, err)
 			}
@@ -146,6 +162,70 @@ func parseCompoundData(rawData []byte, compoundType *CompoundType, numElements u
 	}
 
 	return result, nil
+}
+
+// compoundRowCost estimates the bytes one decoded row occupies: a map header
+// plus, per member, a key, an interface value and its payload. Deliberately
+// generous so a tiny struct cannot expand 100x past the caller's limit.
+func compoundRowCost(c *CompoundType) uint64 {
+	cost := uint64(64)
+	for _, m := range c.Members {
+		cost += 80
+		if m.Type.IsCompound() {
+			if nested, err := ParseCompoundType(m.Type); err == nil {
+				cost += compoundRowCost(nested)
+			}
+		}
+		n := uint64(1)
+		for _, d := range m.Dims {
+			n *= uint64(d)
+		}
+		cost += (n - 1) * 24
+	}
+	return cost
+}
+
+// arrayDatatype decodes an array datatype's dimensions and base type.
+func arrayDatatype(dt *DatatypeMessage) ([]uint32, *DatatypeMessage, error) {
+	p := dt.Properties
+	ndims, dimsOff, off, ok := arrayLayout(dt.Version, p)
+	if !ok {
+		return nil, nil, errors.New("array datatype truncated")
+	}
+	dims := make([]uint32, ndims)
+	for i := range dims {
+		dims[i] = binary.LittleEndian.Uint32(p[dimsOff+4*i:])
+	}
+	base, err := ParseDatatypeMessage(p[off:])
+	if err != nil {
+		return nil, nil, fmt.Errorf("array base type: %w", err)
+	}
+	return dims, base, nil
+}
+
+// decodeArray decodes a row-major array member into a flat []interface{} of
+// natural-typed elements (multi-dimensional arrays are flattened).
+func decodeArray(data []byte, base *DatatypeMessage, dims []uint32, r io.ReaderAt, sb *Superblock) (interface{}, error) {
+	if base.Size == 0 {
+		return nil, errors.New("array member with zero-size base type")
+	}
+	maxN := uint64(len(data)) / uint64(base.Size)
+	n := uint64(1)
+	for _, d := range dims {
+		if d != 0 && n > maxN/uint64(d) {
+			return nil, errors.New("array member larger than its compound")
+		}
+		n *= uint64(d)
+	}
+	out := make([]interface{}, n)
+	for i := range out {
+		v, err := parseMemberValue(data[uint64(i)*uint64(base.Size):], base, r, sb)
+		if err != nil {
+			return nil, fmt.Errorf("array element %d: %w", i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
 }
 
 // parseMemberValue parses a single member value based on its datatype.
@@ -167,19 +247,16 @@ func parseMemberValue(data []byte, datatype *DatatypeMessage, r io.ReaderAt, sb 
 		bits := byteOrder.Uint32(data[0:4])
 		return math.Float32frombits(bits), nil
 
-	case datatype.IsInt32():
-		if len(data) < 4 {
-			return nil, errors.New("insufficient data for int32")
-		}
-		//nolint:gosec // G115: HDF5 binary format requires uint32 to int32 conversion
-		return int32(byteOrder.Uint32(data[0:4])), nil
+	case datatype.Class == DatatypeFixed:
+		// Same signedness/width/byte-order decoding as attributes.
+		return readFixedAttr(&Attribute{Datatype: datatype, Data: data}, 1, true)
 
-	case datatype.IsInt64():
-		if len(data) < 8 {
-			return nil, errors.New("insufficient data for int64")
+	case datatype.Class == DatatypeArray:
+		dims, base, err := arrayDatatype(datatype)
+		if err != nil {
+			return nil, err
 		}
-		//nolint:gosec // G115: HDF5 binary format requires uint64 to int64 conversion
-		return int64(byteOrder.Uint64(data[0:8])), nil
+		return decodeArray(data, base, dims, r, sb)
 
 	case datatype.IsFixedString():
 		// CVE-2025-2926 fix: Validate string size before processing.

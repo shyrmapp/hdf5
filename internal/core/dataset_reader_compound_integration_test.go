@@ -188,7 +188,7 @@ func TestParseMemberValue_AllTypes(t *testing.T) {
 			datatype: &DatatypeMessage{
 				Class:         DatatypeFixed,
 				Size:          4,
-				ClassBitField: 0,
+				ClassBitField: 0x08, // signed
 			},
 			want:    int32(42),
 			wantErr: false,
@@ -199,7 +199,7 @@ func TestParseMemberValue_AllTypes(t *testing.T) {
 			datatype: &DatatypeMessage{
 				Class:         DatatypeFixed,
 				Size:          8,
-				ClassBitField: 0,
+				ClassBitField: 0x08, // signed
 			},
 			want:    int64(100),
 			wantErr: false,
@@ -314,7 +314,7 @@ func TestParseCompoundData_DataTruncation(t *testing.T) {
 				Offset: 0,
 				Type: &DatatypeMessage{
 					Class: DatatypeFixed,
-					Size:  4,
+					Size:  4, ClassBitField: 0x08,
 				},
 			},
 			{

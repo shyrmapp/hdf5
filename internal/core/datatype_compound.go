@@ -1,15 +1,18 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 )
 
 // CompoundMember represents a single field in a compound datatype.
 type CompoundMember struct {
 	Name   string           // Field name.
 	Offset uint32           // Byte offset within the compound structure.
+	Dims   []uint32         // Array dimensions of a v1 member with intrinsic arrayness; nil for scalars.
 	Type   *DatatypeMessage // Member datatype (can be any type, including nested compound).
 }
 
@@ -19,161 +22,101 @@ type CompoundType struct {
 	Members []CompoundMember // List of members/fields.
 }
 
+// maxCompoundVersion is the newest compound encoding known: HDF5 2.x writes
+// versions 4 and 5 for the latest format, with the v3 member layout.
+const maxCompoundVersion = 5
+
 // ParseCompoundType parses compound datatype properties to extract member information.
-// Properties format (version 1):
-// - Bytes 0-1: Number of members (uint16).
-// - For each member:
-//   - Byte offset in structure (uint32 for version 1).
-//   - Dimensionality (1 byte, usually 0 for scalar).
-//   - Reserved bytes (3 bytes for version 1).
-//   - Member name (null-terminated string, padded to multiple of 8 bytes).
-//   - Member datatype (recursive datatype message, 8+ bytes).
+// The member count is always in ClassBitField bits 0-15. Per member:
+//   - v1: name padded to 8 bytes, uint32 offset, 28 bytes of array info, datatype.
+//   - v2: name padded to 8 bytes, uint32 offset, datatype.
+//   - v3+: unpadded name, offset in the fewest bytes that can encode the
+//     compound's size, datatype.
 func ParseCompoundType(dt *DatatypeMessage) (*CompoundType, error) {
 	if dt.Class != DatatypeCompound {
 		return nil, errors.New("not a compound datatype")
 	}
-
-	if len(dt.Properties) < 2 {
-		return nil, errors.New("compound properties too short")
-	}
-
-	compound := &CompoundType{
-		Size:    dt.Size,
-		Members: make([]CompoundMember, 0),
-	}
-
-	// Parse based on version.
-	switch dt.Version {
-	case 1:
-		// For version 1, number of members is in ClassBitField bits 0-15.
-		numMembers := uint16(dt.ClassBitField & 0xFFFF)
-		return parseCompoundV1(compound, dt.Properties, numMembers)
-	case 3:
-		return parseCompoundV3(compound, dt.Properties)
-	default:
-		return nil, fmt.Errorf("unsupported compound datatype version: %d", dt.Version)
-	}
+	c, _, err := parseCompoundProps(dt.Version, dt.ClassBitField, dt.Size, dt.Properties, 0)
+	return c, err
 }
 
-// parseCompoundV1 parses version 1 compound datatype properties.
-// Format per member (H5Odtype.c:360-481):
-//  1. Name (null-terminated, padded to 8-byte boundary).
-//  2. Offset (uint32, 4 bytes).
-//  3. Array info (28 bytes total):
-//     - Dimensionality (1 byte).
-//     - Reserved (3 bytes).
-//     - Dimension permutation (4 bytes).
-//     - Reserved (4 bytes).
-//     - Dimension sizes (4 × uint32 = 16 bytes).
-//  4. Member datatype (recursive, NO padding between members).
-func parseCompoundV1(compound *CompoundType, properties []byte, numMembers uint16) (*CompoundType, error) {
+// compoundOffsetBytes is the v3 member-offset width: the fewest bytes that can
+// encode the compound size (H5VM_limit_enc_size), so 255 -> 1 and 256 -> 2.
+func compoundOffsetBytes(size uint32) int {
+	return (bits.Len32(size)-1)/8 + 1
+}
+
+// parseCompoundProps decodes every member and returns the compound with the
+// number of property bytes consumed. calculateCompoundPropsLen shares it so
+// the two cannot disagree about where a nested compound ends.
+func parseCompoundProps(version uint8, classBitField, size uint32, props []byte, depth int) (*CompoundType, int, error) {
+	if version < 1 || version > maxCompoundVersion {
+		return nil, 0, fmt.Errorf("unsupported compound datatype version: %d", version)
+	}
+	numMembers := classBitField & 0xFFFF
+	compound := &CompoundType{Size: size}
 	offset := 0
 
-	for i := uint16(0); i < numMembers; i++ {
-		member := CompoundMember{}
-
-		// 1. Member name (null-terminated, padded to multiple of 8 bytes).
-		nameStart := offset
-		nameEnd := nameStart
-		for nameEnd < len(properties) && properties[nameEnd] != 0 {
-			nameEnd++
-		}
-
-		if nameEnd >= len(properties) {
-			return nil, fmt.Errorf("member %d name not null-terminated", i)
-		}
-
-		member.Name = string(properties[nameStart:nameEnd])
-		nameLen := nameEnd - nameStart
-
-		// Advance to 8-byte boundary: ((nameLen + 8) / 8) * 8.
-		offset = nameStart + ((nameLen+8)/8)*8
-
-		// 2. Member byte offset (uint32).
-		if offset+4 > len(properties) {
-			return nil, fmt.Errorf("member %d: offset field truncated", i)
-		}
-		member.Offset = binary.LittleEndian.Uint32(properties[offset : offset+4])
-		offset += 4
-
-		// 3. Array info (always 28 bytes for version 1, even for scalar members).
-		if offset+28 > len(properties) {
-			return nil, fmt.Errorf("member %d: array info truncated", i)
-		}
-		// Skip array info (we don't support array members yet).
-		offset += 28
-
-		// 4. Member datatype (recursive parse).
-		if offset+8 > len(properties) {
-			return nil, fmt.Errorf("member %d: datatype header truncated", i)
-		}
-
-		memberType, err := ParseDatatypeMessage(properties[offset:])
+	for i := uint32(0); i < numMembers; i++ {
+		m, n, err := parseCompoundMember(version, size, props[offset:], depth)
 		if err != nil {
-			return nil, fmt.Errorf("member %d (%s): failed to parse datatype: %w", i, member.Name, err)
+			return nil, 0, fmt.Errorf("member %d (%s): %w", i, m.Name, err)
 		}
-		member.Type = memberType
-
-		// Advance past member datatype (no padding between members).
-		offset += memberType.GetEncodedSize()
-
-		compound.Members = append(compound.Members, member)
+		offset += n
+		compound.Members = append(compound.Members, m)
 	}
-
-	return compound, nil
+	return compound, offset, nil
 }
 
-// parseCompoundV3 parses version 3 compound datatype properties.
-func parseCompoundV3(compound *CompoundType, properties []byte) (*CompoundType, error) {
-	// Version 3 uses uint32 for member count.
-	if len(properties) < 4 {
-		return nil, errors.New("compound v3 properties too short")
+// parseCompoundMember decodes one member from the head of props and returns
+// the bytes it occupies. On error the member may carry only its name.
+func parseCompoundMember(version uint8, size uint32, props []byte, depth int) (CompoundMember, int, error) {
+	var m CompoundMember
+
+	end := bytes.IndexByte(props, 0)
+	if end < 0 {
+		return m, 0, errors.New("name not null-terminated")
+	}
+	m.Name = string(props[:end])
+	offset := end + 1
+	if version < 3 {
+		offset = ((end + 8) / 8) * 8 // padded to a multiple of 8, terminator included
 	}
 
-	numMembers := binary.LittleEndian.Uint32(properties[0:4])
-	offset := 4
+	offBytes := 4
+	if version >= 3 {
+		offBytes = compoundOffsetBytes(size)
+	}
+	if offset+offBytes > len(props) {
+		return m, 0, errors.New("offset field truncated")
+	}
+	for j := offBytes - 1; j >= 0; j-- {
+		m.Offset = m.Offset<<8 | uint32(props[offset+j])
+	}
+	offset += offBytes
 
-	for i := uint32(0); i < numMembers; i++ {
-		member := CompoundMember{}
-
-		// Member name (null-terminated, NOT padded in version 3).
-		nameStart := offset
-		nameEnd := nameStart
-		for nameEnd < len(properties) && properties[nameEnd] != 0 {
-			nameEnd++
+	if version == 1 {
+		if offset+28 > len(props) {
+			return m, 0, errors.New("array info truncated")
 		}
-
-		if nameEnd >= len(properties) {
-			return nil, fmt.Errorf("member %d: name not null-terminated (offset=%d, len=%d)", i, offset, len(properties))
+		// Dimensionality, 3 reserved, 4 permutation, 4 reserved, 4 x uint32 sizes.
+		ndims := int(props[offset])
+		if ndims > 4 {
+			return m, 0, fmt.Errorf("%d array dimensions (max 4)", ndims)
 		}
-
-		member.Name = string(properties[nameStart:nameEnd])
-		offset = nameEnd + 1
-
-		// Member byte offset (uint32).
-		if offset+4 > len(properties) {
-			return nil, fmt.Errorf("member %d (%s): offset field truncated (offset=%d, len=%d)", i, member.Name, offset, len(properties))
+		for d := 0; d < ndims; d++ {
+			m.Dims = append(m.Dims, binary.LittleEndian.Uint32(props[offset+12+4*d:]))
 		}
-		member.Offset = binary.LittleEndian.Uint32(properties[offset : offset+4])
-		offset += 4
-
-		// Member datatype (recursive parse).
-		if offset+8 > len(properties) {
-			return nil, fmt.Errorf("member %d (%s): datatype header truncated (offset=%d, need 8 more bytes, have %d)", i, member.Name, offset, len(properties)-offset)
-		}
-
-		memberType, err := ParseDatatypeMessage(properties[offset:])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse member %d datatype: %w", i, err)
-		}
-		member.Type = memberType
-
-		// Advance past member datatype.
-		memberTypeSize := 8 + len(memberType.Properties)
-		offset += memberTypeSize
-
-		compound.Members = append(compound.Members, member)
+		offset += 28
 	}
 
-	return compound, nil
+	if offset+8 > len(props) {
+		return m, 0, fmt.Errorf("datatype header truncated (need 8 bytes, have %d)", len(props)-offset)
+	}
+	mt, err := parseDatatypeMessage(props[offset:], depth+1)
+	if err != nil {
+		return m, 0, fmt.Errorf("failed to parse datatype: %w", err)
+	}
+	m.Type = mt
+	return m, offset + 8 + len(mt.Properties), nil
 }

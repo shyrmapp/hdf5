@@ -28,7 +28,11 @@ func testBasicType(class core.DatatypeClass, size uint32) *core.DatatypeMessage 
 	case core.DatatypeString:
 		props = []byte{0}
 	}
-	return &core.DatatypeMessage{Class: class, Version: 1, Size: size, Properties: props}
+	var bf uint32
+	if class == core.DatatypeFixed {
+		bf = 0x08 // signed
+	}
+	return &core.DatatypeMessage{Class: class, Version: 1, Size: size, ClassBitField: bf, Properties: props}
 }
 
 // testEncodeCompoundV3 encodes a version-3 compound datatype message
@@ -36,13 +40,18 @@ func testBasicType(class core.DatatypeClass, size uint32) *core.DatatypeMessage 
 func testEncodeCompoundV3(totalSize uint32, fields []testCompoundField) []byte {
 	le := binary.LittleEndian
 	buf := make([]byte, 0, 64)
-	buf = le.AppendUint32(buf, uint32(core.DatatypeCompound)|3<<4)
+	// Member count lives in the class bit field; offsets use the fewest bytes
+	// that encode totalSize.
+	buf = le.AppendUint32(buf, uint32(core.DatatypeCompound)|3<<4|uint32(len(fields))<<8)
 	buf = le.AppendUint32(buf, totalSize)
-	buf = le.AppendUint32(buf, uint32(len(fields)))
+	offBytes := 1
+	for s := totalSize; s > 0xFF; s >>= 8 {
+		offBytes++
+	}
 	for _, f := range fields {
 		buf = append(buf, f.name...)
 		buf = append(buf, 0)
-		buf = le.AppendUint32(buf, f.offset)
+		buf = le.AppendUint32(buf, f.offset)[:len(buf)+offBytes]
 		buf = le.AppendUint32(buf, uint32(f.typ.Class)|uint32(f.typ.Version)<<4|f.typ.ClassBitField<<8)
 		buf = le.AppendUint32(buf, f.typ.Size)
 		buf = append(buf, f.typ.Properties...)

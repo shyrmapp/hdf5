@@ -230,8 +230,6 @@ func buildSimpleDataspaceMessage(dims []uint64) []byte {
 }
 
 // buildContiguousLayoutMessage creates a contiguous layout message.
-//
-//nolint:unparam // address parameter is intentionally flexible for test helpers
 func buildContiguousLayoutMessage(address, size uint64) []byte {
 	// Layout message format (version 3):
 	// Byte 0: version
