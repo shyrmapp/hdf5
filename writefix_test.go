@@ -98,3 +98,16 @@ func TestDuplicateAndInvalidNames(t *testing.T) {
 	require.Contains(t, out, `DATASET "child2"`)
 	require.Equal(t, 1, strings.Count(out, `DATASET "dup"`))
 }
+
+func TestHugeAttributeRejected(t *testing.T) {
+	fw, file := newWriteFile(t)
+	ds, err := fw.CreateDataset("/d", Int32, []uint64{1})
+	require.NoError(t, err)
+	require.NoError(t, ds.Write([]int32{3}))
+	require.Error(t, ds.WriteAttribute("big", make([]byte, 70000)))
+	require.Error(t, ds.WriteAttribute("bigs", strings.Repeat("x", 70000)))
+	require.NoError(t, ds.WriteAttribute("ok", "fine"))
+	require.NoError(t, fw.Close())
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, `"fine"`)
+}

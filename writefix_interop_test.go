@@ -194,3 +194,33 @@ func TestCInterop_ChunkedEdgeChunks(t *testing.T) {
 	})
 	require.Equal(t, 2, n)
 }
+
+func TestCInterop_UnwrittenChunkedDataset(t *testing.T) {
+	fw, file := newWriteFile(t)
+	_, err := fw.CreateDataset("/empty", Int32, []uint64{10}, WithChunkDims([]uint64{5}))
+	require.NoError(t, err)
+	_, err = fw.CreateDataset("/emptyr", Float64, []uint64{4, 4},
+		WithChunkDims([]uint64{2, 2}), WithMaxDims([]uint64{Unlimited, 4}))
+	require.NoError(t, err)
+	big, err := fw.CreateDataset("/big", Int32, []uint64{6}, WithChunkDims([]uint64{3}),
+		WithShuffle(), WithGZIPCompression(3), WithFletcher32())
+	require.NoError(t, err)
+	require.NoError(t, big.Write([]int32{1, 2, 3, 4, 5, 6}))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Contains(t, out, `DATASET "empty"`)
+	require.Contains(t, out, "(0): 0, 0, 0, 0, 0, 0, 0, 0, 0, 0")
+	require.Contains(t, out, "(0): 1, 2, 3, 4, 5, 6")
+
+	f, err := Open(file)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	f.Walk(func(path string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok && path == "/empty" {
+			got, rerr := ds.Read()
+			require.NoError(t, rerr)
+			require.Len(t, got, 10)
+		}
+	})
+}

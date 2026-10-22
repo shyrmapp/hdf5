@@ -187,6 +187,10 @@ func writeCompactAttribute(fw *FileWriter, objectAddr uint64, oh *core.ObjectHea
 	if err != nil {
 		return fmt.Errorf("failed to encode attribute message: %w", err)
 	}
+	// Header message sizes are 16-bit; a larger message would corrupt the header.
+	if len(attrMsg) > math.MaxUint16 {
+		return fmt.Errorf("attribute %q is too large (%d bytes encoded, header message limit is %d)", name, len(attrMsg), math.MaxUint16)
+	}
 
 	// 4. Upsert: same-size replacement is patched in place; a different size
 	// drops the old message and appends the new one like a fresh attribute.
