@@ -116,7 +116,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and known gaps.
 
 ## Development
 
-Requires Go 1.26+. Pure-Go dependencies only (no CGo).
+Requires Go 1.27+. Pure-Go dependencies only (no CGo).
 
 ```bash
 go test ./...          # run tests

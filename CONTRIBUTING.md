@@ -165,7 +165,7 @@ test -z "$(gofmt -l .)" && golangci-lint run && go test ./...
 
 ### Prerequisites
 
-- Go 1.26 or later
+- Go 1.27 or later
 - golangci-lint (see [installation](https://golangci-lint.run/welcome/install/))
 - Python 3 with h5py and numpy (optional, for test file generation)
 

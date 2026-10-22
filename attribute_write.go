@@ -545,23 +545,25 @@ func deleteCompactAttributeFromHeader(fw *FileWriter, objectAddr uint64, oh *cor
 	return nil
 }
 
-// deleteDenseAttributeFromHeader deletes attribute from dense storage by reading Attribute Info from header.
-func deleteDenseAttributeFromHeader(fw *FileWriter, _ uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
-	// Find Attribute Info Message
-	var attrInfo *core.AttributeInfoMessage
+// findAttributeInfo parses the object's Attribute Info message, which exists only with dense storage.
+func findAttributeInfo(oh *core.ObjectHeader, sb *core.Superblock) (*core.AttributeInfoMessage, error) {
 	for _, msg := range oh.Messages {
 		if msg.Type == core.MsgAttributeInfo {
-			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
+			attrInfo, err := core.ParseAttributeInfoMessage(msg.Data, sb)
 			if err != nil {
-				return fmt.Errorf("failed to parse attribute info message: %w", err)
+				return nil, fmt.Errorf("failed to parse attribute info message: %w", err)
 			}
-			attrInfo = parsed
-			break
+			return attrInfo, nil
 		}
 	}
+	return nil, fmt.Errorf("attribute info message not found (dense storage not initialized)")
+}
 
-	if attrInfo == nil {
-		return fmt.Errorf("attribute info message not found")
+// deleteDenseAttributeFromHeader deletes attribute from dense storage by reading Attribute Info from header.
+func deleteDenseAttributeFromHeader(fw *FileWriter, _ uint64, oh *core.ObjectHeader, name string, sb *core.Superblock) error {
+	attrInfo, err := findAttributeInfo(oh, sb)
+	if err != nil {
+		return err
 	}
 
 	// Delete attribute from dense storage
@@ -625,31 +627,17 @@ func deleteDenseAttributeImpl(fw *FileWriter, attrInfo *core.AttributeInfoMessag
 // (i.e., files that were created, closed, and reopened).
 //
 // Reference: H5Adense.c - H5A__dense_insert().
-//
-//nolint:gocyclo,cyclop // Complex RMW logic with multiple verification steps
 func writeDenseAttribute(fw *FileWriter, _ uint64, oh *core.ObjectHeader,
 	name string, value interface{}, sb *core.Superblock) error {
 	// Step 1: Find Attribute Info Message
-	var attrInfo *core.AttributeInfoMessage
-	for _, msg := range oh.Messages {
-		if msg.Type == core.MsgAttributeInfo {
-			// Parse the message data
-			parsed, err := core.ParseAttributeInfoMessage(msg.Data, sb)
-			if err != nil {
-				return fmt.Errorf("failed to parse attribute info message: %w", err)
-			}
-			attrInfo = parsed
-			break
-		}
-	}
-
-	if attrInfo == nil {
-		return fmt.Errorf("attribute info message not found (dense storage not initialized)")
+	attrInfo, err := findAttributeInfo(oh, sb)
+	if err != nil {
+		return err
 	}
 
 	// Step 2: Load existing fractal heap from file
 	heap := structures.NewWritableFractalHeap(64 * 1024) // Match size from dense attribute writer
-	err := heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
+	err = heap.LoadFromFile(fw.writer.Reader(), attrInfo.FractalHeapAddr, sb)
 	if err != nil {
 		return fmt.Errorf("failed to load fractal heap: %w", err)
 	}
