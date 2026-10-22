@@ -72,10 +72,10 @@ func TestReadSuperblockV2(t *testing.T) {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x02,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = offset:8 bytes(code 3), length:8 bytes(code 3)
-		0x33,
+		// Size of offsets (1 byte) - offset 9
+		0x08,
+		// Size of lengths (1 byte) - offset 10
+		0x08,
 		// Reserved (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
@@ -106,10 +106,10 @@ func TestReadSuperblockV3(t *testing.T) {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x03,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = offset:8 bytes(code 3), length:8 bytes(code 3)
-		0x33,
+		// Size of offsets (1 byte) - offset 9
+		0x08,
+		// Size of lengths (1 byte) - offset 10
+		0x08,
 		// Reserved (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
@@ -405,10 +405,10 @@ func createMockSuperblockV2(t *testing.T) []byte {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x02,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = 8 bytes for both
-		0x33,
+		// Size of offsets (1 byte) - offset 9
+		0x08,
+		// Size of lengths (1 byte) - offset 10
+		0x08,
 		// Reserved (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
@@ -435,10 +435,10 @@ func createMockSuperblockV3(t *testing.T) []byte {
 		0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n',
 		// Version (1 byte) - offset 8
 		0x03,
-		// Endianness flag (1 byte) - offset 9: 0=little-endian
-		0x00,
-		// Packed sizes (1 byte) - offset 10: 0x33 = 8 bytes for both
-		0x33,
+		// Size of offsets (1 byte) - offset 9
+		0x08,
+		// Size of lengths (1 byte) - offset 10
+		0x08,
 		// Reserved (1 byte) - offset 11
 		0x00,
 		// Base address (8 bytes) - offset 12
@@ -501,24 +501,24 @@ func TestReadSuperblock_ParseErrors(t *testing.T) {
 			reader: func() *bytes.Reader {
 				data := make([]byte, 128)
 				copy(data, validSig)
-				data[8] = 2     // Version 2
-				data[9] = 0     // Little-endian
-				data[10] = 0x0F // Packed codes: offset code 15 is invalid
+				data[8] = 2 // Version 2
+				data[9] = 3 // Size of offsets: 3 is invalid
+				data[10] = 8
 				return bytes.NewReader(data)
 			},
-			wantErr: "invalid offset size code",
+			wantErr: "invalid sizes for version 2",
 		},
 		{
 			name: "invalid length size code",
 			reader: func() *bytes.Reader {
 				data := make([]byte, 128)
 				copy(data, validSig)
-				data[8] = 2     // Version 2
-				data[9] = 0     // Little-endian
-				data[10] = 0xF3 // Offset code 3 (8 bytes), length code 15 invalid
+				data[8] = 2 // Version 2
+				data[9] = 8
+				data[10] = 15 // Size of lengths: 15 is invalid
 				return bytes.NewReader(data)
 			},
-			wantErr: "invalid length size code",
+			wantErr: "invalid sizes for version 2",
 		},
 	}
 
