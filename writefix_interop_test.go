@@ -152,3 +152,45 @@ func TestCInterop_ResizeAfterWriteKeepsData(t *testing.T) {
 	require.Contains(t, out, `"yes"`)
 	require.Contains(t, out, "( 30 )")
 }
+
+func TestCInterop_ChunkedEdgeChunks(t *testing.T) {
+	fw, file := newWriteFile(t)
+	vals := make([]int32, 25)
+	for i := range vals {
+		vals[i] = int32(i + 1)
+	}
+	for name, opts := range map[string][]DatasetOption{
+		"/plain": {WithChunkDims([]uint64{2, 2})},
+		"/gzip":  {WithChunkDims([]uint64{2, 2}), WithShuffle(), WithGZIPCompression(4)},
+	} {
+		ds, err := fw.CreateDataset(name, Int32, []uint64{5, 5}, opts...)
+		require.NoError(t, err)
+		require.NoError(t, ds.Write(vals))
+	}
+	d1, err := fw.CreateDataset("/oned", Int32, []uint64{5}, WithChunkDims([]uint64{2}))
+	require.NoError(t, err)
+	require.NoError(t, d1.Write(vals[:5]))
+	require.NoError(t, fw.Close())
+
+	out := h5dumpClean(t, file)
+	require.Equal(t, 2, strings.Count(out, "(4,0): 21, 22, 23, 24, 25"), out)
+	require.Equal(t, 2, strings.Count(out, "(1,0): 6, 7, 8, 9, 10"), out)
+	require.Contains(t, out, "(0): 1, 2, 3, 4, 5")
+
+	f, err := Open(file)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	n := 0
+	f.Walk(func(path string, obj Object) {
+		if ds, ok := obj.(*Dataset); ok && path != "/oned" {
+			got, rerr := ds.Read()
+			require.NoError(t, rerr)
+			require.Len(t, got, 25)
+			for i, v := range got {
+				require.InDelta(t, float64(i+1), v, 0, "%s[%d]", path, i)
+			}
+			n++
+		}
+	})
+	require.Equal(t, 2, n)
+}
